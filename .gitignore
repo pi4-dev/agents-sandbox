@@ -1,0 +1,30 @@
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+!**/*.env.example
+**/*.env
+**/*.env.*
+!**/*.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+ssl/squid-ca.*
+
+# Runtime state / caches
+claude-main/data/
+hermes/data/
+hermes/workspace/
+open-webui/data/
+litellm/db/
+squid/logs/
+**/__pycache__/
+**/.pytest_cache/
+node_modules/
+*.log
+
+# IDE and OS noise
+.DS_Store
+.idea/
+.vscode/
