@@ -1,0 +1,28 @@
+model_list:
+  - model_name: claude-sub
+    litellm_params:
+      model: openai/claude-subscription
+      api_base: http://192.19.255.103:9090/v1
+      api_key: os.environ/CLAUDE_OAI_KEY
+  - model_name: qwen
+    litellm_params:
+      model: openai/Qwen-latest
+      api_base: os.environ/QWEN_API_BASE  
+      api_key: os.environ/QWEN_API_KEY
+  - model_name: qwen-claude
+    litellm_params:
+      model: openai/Qwen3.8-27B-Claude-Code
+      api_base: os.environ/QWEN_API_BASE  
+      api_key: os.environ/QWEN_API_KEY
+
+litellm_settings:
+  drop_params: true
+  request_timeout: 300
+general_settings:
+  trusted_proxy_ranges: []
+  master_key: os.environ/LITELLM_MASTER_KEY
+  admin_only_routes:
+    - "/model/info"
+    - "/v1/model/info"
+    - "/v2/model/info"
+    - "/model_group/info"

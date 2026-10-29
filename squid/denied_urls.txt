@@ -1,0 +1,10 @@
+# denied_urls.txt
+# sprawdzane przed allow, na calym rozszyfrowanym ruchu
+
+# blokada push (smart-HTTP receive-pack)
+/git-receive-pack$
+
+# traversal jako segment sciezki (literalny i zakodowany)
+/\.\./
+/%2e%2e
+%2e%2e/

@@ -1,0 +1,273 @@
+name: ai-playground
+
+x-fw-sidecar: &fw-sidecar
+  image: nicolaka/netshoot:latest
+  init: true
+  cap_add: [NET_ADMIN]
+  command: ["sh", "/fw.sh"]
+  dns_search: non-exists.coma
+  depends_on:
+    ae-squid: { condition: service_started }
+  healthcheck:
+    test: ["CMD", "test", "-f", "/tmp/ready"]
+    interval: 2s
+    retries: 10
+  restart: unless-stopped
+
+x-fw-env: &fw-env
+  PROXY_IP: ${PROXY_IP}
+  PORT_PORT: ${PROXY_PORT}
+
+services:
+  ae-hermes-net:
+    <<: *fw-sidecar
+    container_name: ae-hermes-net
+    hostname: hermes
+    dns: 127.0.0.1
+    environment:
+      <<: *fw-env
+      FW_LOG: 1
+      ALLOW_IN: >-
+        tcp:9119:10.0.0.0/24
+      ALLOW_OUT: >-
+        tcp:${LITELLM_IP}:4000
+    volumes:
+      - ./fw/fw.sh:/fw.sh:ro
+    networks:
+      vlan_net:
+        ipv4_address: ${HERMES_IP}
+
+# - - - - - - - - - - - - - - - - - - - - - -
+
+  ae-hermes:
+    image: nousresearch/hermes-agent:stable
+    container_name: ae-hermes
+    restart: unless-stopped
+
+    # Keep the official entrypoint (s6-overlay). Do NOT set user: 0:0.
+    # Hermes runs as its managed user; the Docker socket grants host-root-equivalent access.
+    command: ["gateway", "run"]
+
+    # LAB ONLY. This, together with docker.sock, effectively removes host isolation.
+    privileged: true
+
+    depends_on:
+      ae-litellm: { condition: service_healthy }
+      ae-hermes-net: { condition: service_healthy }
+
+    volumes:
+      - ./hermes/data:/opt/data:rw
+      - ./hermes/config.yaml:/opt/data/config.yaml:ro
+      - ./hermes/workspace:/workspace:rw
+
+    network_mode: service:ae-hermes-net
+
+    env_file:
+      - proxy.env
+      - hermes/hermes.env
+
+    # Full-access LAB: deliberately NO cap_drop / no-new-privileges / read_only.
+    # The upstream stage2 hook detects the Docker socket GID and adds 'hermes'
+    # to the corresponding group (PUID/PGID must remain nonzero).
+    shm_size: "1g"
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+# -----------------------------------------------------
+
+  ae-open-webui:
+    image: ghcr.io/open-webui/open-webui:main
+    container_name: ae-open-webui
+    restart: unless-stopped
+    env_file:
+      - open-webui/open-webui.env
+    depends_on:
+      ae-litellm: { condition: service_healthy }
+    volumes:
+      - ./open-webui/data:/app/backend/data
+    networks:
+      vlan_net:
+          ipv4_address: ${OPEN_WEBUI_IP}
+
+
+# -----------------------------------------------------
+
+  ae-litellm:
+    image: ghcr.io/berriai/litellm:main-stable
+    container_name: ae-litellm
+    restart: unless-stopped
+    #ports:
+    #  - "4000:4000"
+    env_file:
+      - ./litellm/litellm.env
+      - proxy.env
+    depends_on:
+      ae-claude-main: { condition: service_started }
+      ae-litellm-db: { condition: service_healthy }
+    networks:
+      vlan_net:
+        ipv4_address: ${LITELLM_IP}
+      ae-litellm-db: {}
+    volumes:
+      - ./litellm/litellm-config.yaml:/app/config.yaml:ro
+      - ./ssl/squid-ca.crt:/certs/proxy-ca.crt:ro
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request,sys; sys.exit(0) if urllib.request.urlopen('http://127.0.0.1:4000/health/liveliness',timeout=4).status==200 else sys.exit(1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+# - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+  ae-litellm-db:
+    image: postgres:16-alpine
+    container_name: ae-litellm-db
+    restart: unless-stopped
+    env_file:
+      - ./litellm/litellm-db.env
+    volumes:
+    #  - ./litellm/db:/var/lib/postgresql/data
+      - ae-litellm-db_pg_data:/var/lib/postgresql/data
+    networks:
+      ae-litellm-db: { }
+
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U litellm -d litellm"]
+      interval: 10s
+      retries: 5
+
+
+# -----------------------------------------------------
+
+  ae-squid:
+    build: ./squid
+    image: local/squid-ssl
+    container_name: ae-squid
+    hostname: ae-squid
+    #ports:
+    #  - "3128:3128"
+
+    networks:
+      vlan_net:
+        ipv4_address: ${PROXY_IP}
+    volumes:
+      - ./squid/squid.conf:/etc/squid/squid.conf:ro
+      - ./squid/logs:/var/log/squid
+      - ./squid/allowed_domains.txt:/etc/squid/allowed_domains.txt:ro
+      - ./squid/path_domains.txt:/etc/squid/path_domains.txt:ro
+      - ./squid/allowed_urls.txt:/etc/squid/allowed_urls.txt:ro
+      - ./squid/denied_urls.txt:/etc/squid/denied_urls.txt:ro
+      - ./ssl/squid-ca.crt:/etc/squid/ssl/squid-ca.crt:ro
+      - ./ssl/squid-ca.key:/etc/squid/ssl/squid-ca.key:ro
+      - ./squid/errors:/etc/squid/errors:ro
+    tmpfs:
+      - /var/lib/squid:uid=13,gid=13,mode=0750
+    ulimits:
+      nofile:
+        soft: 65535
+        hard: 65535
+
+    restart: unless-stopped
+
+# -----------------------------------------------------
+
+  ae-netshoot-net:
+    <<: *fw-sidecar
+    container_name: ae-netshoot-net
+    hostname: ae-netshoot-net
+    environment:
+      <<: *fw-env                                   # tylko proxy, bez wyjątków
+    volumes:
+      - ./fw/fw.sh:/fw.sh:ro
+    networks:
+      vlan_net:
+        ipv4_address: ${NETSHOOT_IP}
+
+# - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+  ae-netshoot:
+    image: nicolaka/netshoot:latest
+    container_name: ae-netshoot
+    init: true
+    depends_on:
+      ae-netshoot-net:
+        condition: service_healthy
+    env_file:
+      - proxy.env
+    command: ["sh", "-c", "trap 'exit 0' TERM INT; sleep infinity & wait"]
+    network_mode: service:ae-netshoot-net
+    restart: unless-stopped
+
+# -----------------------------------------------------
+  ae-claude-net:
+    <<: *fw-sidecar
+    container_name: ae-claude-net
+    hostname: claude
+    dns: 127.0.0.1
+    environment:
+      <<: *fw-env
+      ALLOW_IN: >- 
+        tcp:9090:${LITELLM_IP}
+      FW_LOG: 1
+    volumes:
+      - ./fw/fw.sh:/fw.sh:ro
+    networks:
+      vlan_net:
+        ipv4_address: ${CLAUDE_IP}
+
+# - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+  ae-claude-main:
+    build:
+      context: ./claude-main
+      additional_contexts:
+        ssl: ./ssl
+    container_name: ae-claude-main
+    #init: true
+    network_mode: service:ae-claude-net
+    depends_on:
+      ae-claude-net:
+        condition: service_healthy
+    env_file:
+      - proxy.env
+      - claude-main/claude.env
+    volumes:
+      - ./claude-main/data/workspace:/workspace
+      - ./claude-main/data/claude-home:/home/node        # login i ustawienia przetrwaja restart
+      - ./claude-main/policy:/etc/claude-code:ro
+      - ./claude-main/CLAUDE.md:/home/node/.claude/CLAUDE.md:ro
+      - ./claude-main/hosts:/etc/hosts:ro
+      - ./claude-main/resolv.conf:/etc/resolv.conf:ro
+      #- ./ssl/ca.crt:/usr/local/share/ca-certificates/proxy-ca.crt:ro
+    stdin_open: true
+    tty: true
+    restart: unless-stopped
+    #command: ["sh", "-c", "trap 'exit 0' TERM INT; sleep infinity & wait"]
+    command: ["sh", "-c", "trap 'exit 0' TERM INT; (cd /workspace/claude-oai && set -a && . ./.env && set +a && while :; do node server.mjs >> server.log 2>&1; sleep 3; done) & sleep
+      infinity & wait"]
+
+
+# -----------------------------------------------------
+
+networks:
+  vlan_net:
+    driver: macvlan
+    driver_opts:
+      parent: vlan100
+    ipam:
+      config:
+        - subnet: 192.19.255.0/24
+          gateway: 192.19.255.1
+          ip_range: 192.19.255.0/26
+  ae-litellm-db:
+    internal: true                 # bez bramy: nie przejmie trasy domyślnej
+    ipam: { config: [ { subnet: 172.31.254.0/24 } ] }
+
+
+volumes:
+  ae-litellm-db_pg_data:

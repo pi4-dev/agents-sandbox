@@ -1,0 +1,28 @@
+# allowed_urls.txt
+# dotyczy tylko path_domains (GitHub); dopasowanie na rozszyfrowanym URL
+
+# twoja organizacja
+^https://github\.com/twoja-org/
+^https://api\.github\.com/repos/twoja-org/
+^https://raw\.githubusercontent\.com/twoja-org/
+
+# azure
+^https://github\.com/Azure/
+^https://api\.github\.com/repos/Azure/
+^https://raw\.githubusercontent\.com/Azure/
+
+# grafana
+^https://github\.com/grafana/
+^https://api\.github\.com/repos/grafana/
+^https://raw\.githubusercontent\.com/grafana/
+
+^https://raw\.githubusercontent\.com/BerriAI/litellm/main/model_prices_and_context_window\.json
+
+# debian
+^http://ftp\.pl\.debian\.org/debian
+^https://ftp\.pl\.debian\.org/debian
+^http://security\.debian\.org/debian-security
+^https://security\.debian\.org/debian-security
+
+
+

@@ -1,0 +1,39 @@
+# Hermes Agent + existing LiteLLM. Update endpoint and model.
+# DIRECT CONNECTION: the hostname/IP in `api` MUST be listed in HERMES_NO_PROXY.
+# Secrets come from docker environment, not from this file.
+providers:
+  litellm:
+    api: "http://192.19.255.100:4000/v1" # CHANGE ME
+    api_key: ${LITELLM_API_KEY}
+    transport: chat_completions
+
+model:
+  provider: litellm
+  default: "qwen"        # CHANGE ME
+
+
+auxiliary:
+  vision:
+    provider: main
+  web_extract:
+    provider: main
+  compression:
+    provider: main
+  title_generation:
+    provider: main
+  session_search:
+    provider: main
+
+terminal:
+  backend: local
+  home_mode: profile
+  cwd: /workspace
+
+
+updates:
+  check: false
+
+# LAB YOLO mode: do not prompt for dangerous shell commands.
+approvals:
+  mode: false
+_config_version: 51
