@@ -8,3 +8,10 @@
 /\.\./
 /%2e%2e
 %2e%2e/
+
+# Cloudflare's /cdn-cgi/ on every host behind it (api.anthropic.com, claude.ai,
+# registry.npmjs.org, ...): /cdn-cgi/trace answers ip=<the proxy's public address>.
+# Cloudflare decodes %XX of unreserved characters, turns \ into /, merges slashes and
+# drops dot segments before it answers, so every character may come encoded and the
+# segment may follow any / or \.
+(/|\\)(c|%63)(d|%64)(n|%6e)(-|%2d)(c|%63)(g|%67)(i|%69)

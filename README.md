@@ -261,6 +261,12 @@ Known limitations:
   upload data to that account. The GitHub rules restrict URLs and methods but are
   not a complete exfiltration boundary. GET query strings to allowed hosts are a
   smaller channel.
+- **Allowed hosts can tell an agent the stack's public IP.** Cloudflare's `/cdn-cgi/`
+  on every host behind it (`/cdn-cgi/trace` answers `ip=` with the proxy's address)
+  is denied in `squid/conf/denied_urls.txt`, in every spelling Cloudflare decodes
+  (`%XX`, `\`, `//`, dot segments; `tests/squid/run-acl-tests.sh`). Squid does not see
+  response bodies, so a Cloudflare error page that shows the visitor's IP, or any
+  allowed service that echoes it, still can.
 - **Squid logs decrypted URLs.** Anyone with access to `squid/logs/` on the host
   can read them; 7 daily files are kept.
 - **Default addressing is public space.** `192.19.255.0/24` is not RFC1918; move

