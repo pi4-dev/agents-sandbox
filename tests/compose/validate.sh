@@ -117,13 +117,24 @@ check(priv["services"]["as-hermes"].get("privileged") is True,
 hermes_mounts = {v["target"]: v for v in svc["as-hermes"].get("volumes", [])}
 check(hermes_mounts.get("/opt/data/config.yaml", {}).get("read_only") is True,
       "as-hermes: config.yaml mounted read-only")
-managed = hermes_mounts.get("/etc/hermes/.env", {})
-check(managed.get("type") == "bind" and managed.get("source", "").endswith("/hermes/managed.env")
-      and managed.get("read_only") is True and (managed.get("bind") or {}).get("create_host_path") is False,
+compose_src = open("docker-compose.yaml").read()
+
+
+def file_mount(source, target):
+    """A read-only bind of one host file that Docker never creates. Checked in the file
+    itself: the rendered config shows the short syntax (Docker creates a missing source as a
+    directory) and a long one with create_host_path: false alike in some Compose versions."""
+    m = hermes_mounts.get(target, {})
+    rendered = (m.get("type") == "bind" and m.get("source", "").endswith(source[1:]) and m.get("read_only") is True
+                and (m.get("bind") or {}).get("create_host_path") is not True)
+    written = re.search(r"- type: bind\n\s+source: " + re.escape(source) + r"\n\s+target: " + re.escape(target)
+                        + r"\n\s+read_only: true\n\s+bind:\n\s+create_host_path: false\n", compose_src)
+    return rendered and written is not None
+
+
+check(file_mount("./hermes/managed.env", "/etc/hermes/.env"),
       "as-hermes: hermes/managed.env read-only at /etc/hermes/.env, never created by Docker")
-soul = hermes_mounts.get("/opt/data/SOUL.md", {})
-check(soul.get("type") == "bind" and soul.get("source", "").endswith("/hermes/SOUL.md")
-      and soul.get("read_only") is True and (soul.get("bind") or {}).get("create_host_path") is False,
+check(file_mount("./hermes/SOUL.md", "/opt/data/SOUL.md"),
       "as-hermes: hermes/SOUL.md read-only at /opt/data/SOUL.md, never created by Docker")
 soul_parts = [p for p in open("hermes/SOUL.md.example").read().split("\n\n") if p.strip()]
 check(len(soul_parts) > 1,
