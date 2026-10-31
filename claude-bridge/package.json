@@ -1,0 +1,14 @@
+{
+  "name": "claude-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "OpenAI-compatible shim over the Claude Agent SDK (subscription login) for LiteLLM",
+  "main": "server.mjs",
+  "scripts": {
+    "start": "node server.mjs"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.3.296"
+  }
+}

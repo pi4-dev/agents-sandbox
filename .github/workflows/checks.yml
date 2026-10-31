@@ -1,0 +1,66 @@
+name: checks
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  static:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: shellcheck
+        run: shellcheck fw/fw.sh ssl/init_ca.sh start-main.sh check-env.sh gen-secrets.sh squid/*.sh tests/*.sh tests/*/*.sh
+      - name: no committed secrets or runtime state
+        run: tests/check-no-secrets.sh
+      - name: env examples use only CHANGE_ME_* placeholders
+        run: ./check-env.sh --examples
+      - name: compose config renders and keeps the security invariants
+        run: tests/compose/validate.sh
+      - name: managed settings are valid JSON
+        run: python3 -m json.tool claude-main/policy/managed-settings.json >/dev/null
+
+  blind-net:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: as-net-blind on real containers (names, proxy paths, ingress, no escape by routing)
+        run: sudo tests/compose/run-blind-tests.sh
+
+  dns:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: as-dns answers only the as-net-blind aliases, never recurses, logs every query
+        run: |
+          command -v dig || { sudo apt-get update && sudo apt-get install -y --no-install-recommends dnsutils; }
+          tests/dns/run-dns-tests.sh
+
+  litellm-keys:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: as-litellm-keys registers pre-generated keys in a real LiteLLM
+        run: tests/litellm/run-keys-tests.sh
+
+  squid-acl:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: install squid (same package as the ubuntu:24.04 image)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends squid-openssl
+          sudo systemctl stop squid || true
+      - name: allowed and blocked requests through squid/conf
+        run: sudo tests/squid/run-acl-tests.sh
+
+  firewall:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: allowed and blocked traffic through fw/fw.sh (IPv4 + IPv6)
+        run: sudo tests/fw/run-fw-tests.sh

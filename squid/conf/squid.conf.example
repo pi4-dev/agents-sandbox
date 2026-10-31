@@ -1,0 +1,120 @@
+# ==================================================================
+# squid.conf
+# ==================================================================
+# The squid/conf directory is mounted as a whole at /etc/squid/conf
+# (not single files), so editing the lists + `squid -k reconfigure`
+# sees the current content whatever the editor does.
+
+# --- Port (fixed: proxy.env, docker-compose.yaml and fw.sh use 3128) + SSL-bump (MITM with our own CA, per-host certificates on the fly) ---
+http_port 3128 ssl-bump \
+    tls-cert=/etc/squid/ssl/squid-ca.crt \
+    tls-key=/etc/squid/ssl/squid-ca.key \
+    generate-host-certificates=on \
+    dynamic_cert_mem_cache_size=16MB
+sslcrtd_program /usr/lib/squid/security_file_certgen -s /var/lib/squid/ssl_db -M 16MB
+sslcrtd_children 5
+
+visible_hostname proxy
+httpd_suppress_version_string on
+
+pinger_enable off
+
+# --- Name resolution ---
+# Squid resolves internet names itself over its VLAN leg: entrypoint.sh writes
+# dns_nameservers from SQUID_DNS_UPSTREAM. as-dns gives the agents no recursion.
+include /var/lib/squid/dns.conf
+# LAN hosts (*.lan.internal), the only names not in public DNS
+hosts_file /etc/squid/conf/lan.hosts
+
+# --- ACL ---
+# Proxy client networks: entrypoint.sh writes SQUID_LOCALNET here (BLIND_SUBNET,
+# LLM_EGRESS_SUBNET + SQUID_LOCALNET_EXTRA from .env), so the config holds no addresses.
+acl localnet src "/var/lib/squid/localnet.txt"
+# LiteLLM: a request that arrived on Squid's as-net-litellm-egress leg (localip) from that
+# network (src). Only LiteLLM and Squid are on it, so membership in the network is
+# the identity, not an address an agent could forge.
+acl litellm_leg localip "/var/lib/squid/litellm_net.txt"
+acl litellm_src src     "/var/lib/squid/litellm_net.txt"
+acl SSL_ports port 443
+acl Safe_ports port 80 443
+acl CONNECT method CONNECT
+
+# -n: no reverse DNS. Without this flag a request to a bare IP address is
+# matched by its PTR record, which the owner of the address controls
+# (PTR -> registry.npmjs.org opened traffic to any IP).
+acl full_domains dstdomain -n "/etc/squid/conf/allowed_domains.txt"
+acl path_domains dstdomain -n "/etc/squid/conf/path_domains.txt"
+acl allowed_urls url_regex -i "/etc/squid/conf/allowed_urls.txt"
+acl denied_urls  url_regex -i "/etc/squid/conf/denied_urls.txt"
+acl llm_api      dstdomain -n "/etc/squid/conf/llm_api_domains.txt"
+# LAN hosts from lan.hosts: LiteLLM only, any port (local LLM servers rarely run on 80/443)
+acl lan_hosts    dstdomain -n .lan.internal
+
+acl write_methods method POST PUT PATCH DELETE
+
+# no writes to GitHub (agents are read-only towards GitHub)
+acl api_github    dstdomain -n api.github.com
+acl github_web    dstdomain -n github.com
+acl git_fetch     urlpath_regex -i /git-upload-pack$
+
+# npm is read-only: publish/unpublish/login are a data exfiltration channel.
+# Exception: POST to the audit API (npm install sends the package list there).
+acl npm_registry  dstdomain -n registry.npmjs.org
+acl npm_audit     urlpath_regex ^/-/npm/v1/security/
+
+# --- Access control ---
+# CONNECT is let in only to set up the tunnel and bump it.
+# The actual decision is made on the DECRYPTED request (the !CONNECT rules),
+# where dstdomain sees the real Host, url_regex the full URL, method the method.
+http_access deny manager
+http_access allow litellm_leg litellm_src lan_hosts
+http_access deny !Safe_ports
+http_access deny CONNECT !SSL_ports
+
+# tunnel setup (enforcement below, after the bump)
+http_access allow localnet CONNECT full_domains
+http_access allow localnet CONNECT path_domains
+http_access allow litellm_leg litellm_src CONNECT llm_api
+
+# decrypted / plaintext requests: enforce Host, URL and method
+http_access deny  denied_urls
+http_access deny  localnet api_github   write_methods
+http_access deny  localnet github_web   write_methods !git_fetch
+http_access deny  localnet npm_registry write_methods !npm_audit
+http_access allow localnet !CONNECT full_domains
+http_access allow localnet !CONNECT path_domains allowed_urls
+http_access allow litellm_leg litellm_src !CONNECT llm_api
+http_access deny all
+
+# Denial = 403 with a readable page (errors/ERR_ACCESS_DENIED) instead of
+# TCP_RESET: the agent sees that it is proxy policy, not a network failure.
+error_directory /etc/squid/errors
+
+# --- SSL-bump: decrypt EVERYTHING (peek only to read the SNI for the certificate) ---
+acl step1 at_step SslBump1
+ssl_bump peek step1
+ssl_bump bump all
+
+# reject what cannot be bumped (non-TLS on 443, raw TCP, other protocols).
+# respond = answer with an error instead of blind tunneling; also the default.
+on_unsupported_protocol respond all
+
+# do not accept invalid certificates of destination servers (also the default)
+sslproxy_cert_error deny all
+
+# --- Logs ---
+# access.log contains full, decrypted URLs. entrypoint.sh runs
+# `squid -k rotate` once a day; 7 previous files are kept.
+logfile_rotate 7
+
+# --- Privacy / header hygiene ---
+forwarded_for delete
+via off
+reply_header_access Via deny all
+reply_header_access X-Cache deny all
+reply_header_access X-Cache-Lookup deny all
+reply_header_access Server deny all
+cache deny all
+icp_port 0
+htcp_port 0
+shutdown_lifetime 1 seconds

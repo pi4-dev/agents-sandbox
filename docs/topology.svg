@@ -1,0 +1,203 @@
+<!-- agents-sandbox topology. Source of truth: docker-compose.yaml; keep in sync with docs/NETWORK.md. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 900" aria-label="Topology: router/firewall, as-net-vlan with as-ingress and as-squid, as-net-blind with agents behind firewall sidecars, LiteLLM, Open WebUI and as-dns, as-net-litellm-egress between LiteLLM and Squid, as-net-litellm-db with the database">
+        <title>agents-sandbox topology</title>
+        <style>
+svg {
+  --bg: #f3f5f7;
+  --surface: #ffffff;
+  --fg: #16202a;
+  --muted: #586675;
+  --line: #c5cfd9;
+  --zone-blind: #e6edf5;
+  --zone-db: #eef0f2;
+  --zone-llm: #d9efed;
+  --zone-fw: #fbf1e2;
+  --c-in: #24609f;
+  --c-proxy: #2c7a4b;
+  --c-llm: #0e7470;
+  --c-dns: #6c45a3;
+  --c-fw: #b0650c;
+  --c-block: #bd3426;
+  --f-display: "IBM Plex Sans Condensed", "Arial Narrow", Arial, sans-serif;
+  --f-body: "IBM Plex Sans", "Segoe UI", Helvetica, Arial, sans-serif;
+  --f-mono: "IBM Plex Mono", "SFMono-Regular", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) { svg {
+    --bg: #0e1318; --surface: #161e27; --fg: #e2e8ee; --muted: #98a6b4; --line: #34414f;
+    --zone-blind: #142030; --zone-db: #1b2129; --zone-llm: #0f2e2d; --zone-fw: #2a2114;
+    --c-in: #6fa7e6; --c-proxy: #5cc48a; --c-llm: #4cc3bd; --c-dns: #b28ee2; --c-fw: #e6a24a; --c-block: #ef6a5a;
+    } }
+text { font-family: var(--f-body); fill: var(--fg); }
+.bg { fill: var(--surface); }
+text { font-family: var(--f-body); fill: var(--fg); }
+.t-title { font-family: var(--f-display); font-weight: 600; font-size: 16px; }
+.t-mono { font-family: var(--f-mono); font-size: 11.5px; fill: var(--muted); }
+.t-zone { font-family: var(--f-mono); font-size: 12px; font-weight: 500; letter-spacing: .03em; }
+.t-edge { font-family: var(--f-mono); font-size: 11px; font-weight: 500; }
+.t-fw { font-family: var(--f-mono); font-size: 11px; font-weight: 500; fill: var(--c-fw); }
+.node { fill: var(--surface); stroke: var(--line); stroke-width: 1.5; }
+.gw { fill: var(--surface); stroke: var(--fg); stroke-width: 1.8; }
+.band { fill: var(--bg); stroke: var(--line); stroke-width: 1.5; }
+.z-blind { fill: var(--zone-blind); stroke: var(--c-in); stroke-width: 1.5; }
+.z-llm { fill: var(--zone-llm); stroke: var(--c-llm); stroke-width: 2; }
+.z-db { fill: var(--zone-db); stroke: var(--line); stroke-width: 1.5; stroke-dasharray: 6 4; }
+.sidecar { fill: var(--zone-fw); stroke: var(--c-fw); stroke-width: 2.2; }
+.neutral { stroke: var(--muted); stroke-width: 2; fill: none; }
+.e-in { stroke: var(--c-in); stroke-width: 2.5; fill: none; }
+.e-proxy { stroke: var(--c-proxy); stroke-width: 2.5; fill: none; }
+.e-llm { stroke: var(--c-llm); stroke-width: 2.5; fill: none; }
+.e-db { stroke: var(--muted); stroke-width: 2; fill: none; stroke-dasharray: 5 4; }
+.e-block { stroke: var(--c-block); stroke-width: 2.5; fill: none; stroke-dasharray: 6 5; }
+.e-x { stroke: var(--c-block); stroke-width: 3; fill: none; }
+.dot-proxy { fill: var(--c-proxy); }
+.dot-llm { fill: var(--c-llm); }
+.m-in { fill: var(--c-in); } .m-proxy { fill: var(--c-proxy); } .m-llm { fill: var(--c-llm); } .m-neutral { fill: var(--muted); }
+.c-in { fill: var(--c-in); } .c-proxy { fill: var(--c-proxy); } .c-llm { fill: var(--c-llm); } .c-block { fill: var(--c-block); }
+.dnsbox { fill: var(--surface); stroke: var(--c-dns); stroke-width: 1.8; }
+        </style>
+        <rect class="bg" x="0" y="0" width="1080" height="900"/>
+        <defs>
+          <marker id="a-in" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="m-in"/></marker>
+          <marker id="a-proxy" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="m-proxy"/></marker>
+          <marker id="a-neutral" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="m-neutral"/></marker>
+        </defs>
+
+        <!-- outside -->
+        <rect class="node" x="405" y="20" width="200" height="56" rx="8"/>
+        <text class="t-title" x="505" y="44" text-anchor="middle">Internet</text>
+        <text class="t-mono" x="505" y="63" text-anchor="middle">Squid allowlist only</text>
+
+        <rect class="node" x="405" y="116" width="200" height="60" rx="8"/>
+        <text class="t-title" x="505" y="141" text-anchor="middle">router/firewall</text>
+        <text class="t-mono" x="505" y="161" text-anchor="middle">DNS · NAT · rules</text>
+
+        <rect class="node" x="40" y="116" width="230" height="60" rx="8"/>
+        <text class="t-title" x="155" y="141" text-anchor="middle">LAN / admin</text>
+        <text class="t-mono" x="155" y="161" text-anchor="middle">browser</text>
+
+        <line class="neutral" x1="505" y1="76" x2="505" y2="116" marker-start="url(#a-neutral)" marker-end="url(#a-neutral)"/>
+        <line class="neutral" x1="270" y1="146" x2="405" y2="146" marker-start="url(#a-neutral)" marker-end="url(#a-neutral)"/>
+        <line class="neutral" x1="505" y1="176" x2="505" y2="210" marker-start="url(#a-neutral)" marker-end="url(#a-neutral)"/>
+
+        <text class="t-mono" x="640" y="130">the router sees two addresses only:</text>
+        <text class="t-mono" x="640" y="148">· Squid .101 → 80/443, router DNS</text>
+        <text class="t-mono" x="640" y="166">· LAN → ingress .99 :80 :8080 :4000 :9119</text>
+
+        <!-- VLAN band -->
+        <rect class="band" x="30" y="210" width="1030" height="44" rx="6"/>
+        <text class="t-zone" x="46" y="237">as-net-vlan · macvlan on VLAN_PARENT · outer legs of the gateways only</text>
+        <text class="t-mono" x="1044" y="237" text-anchor="end">VLAN_SUBNET</text>
+
+        <!-- gateways -->
+        <rect class="gw" x="120" y="296" width="220" height="76" rx="8"/>
+        <text class="t-title" x="230" y="320" text-anchor="middle">as-ingress</text>
+        <text class="t-mono" x="230" y="340" text-anchor="middle">Caddy · INGRESS_IP .99</text>
+        <text class="t-mono" x="230" y="358" text-anchor="middle">ip_forward=0 · read-only</text>
+
+        <rect class="gw" x="600" y="296" width="220" height="76" rx="8"/>
+        <text class="t-title" x="710" y="320" text-anchor="middle">as-squid</text>
+        <text class="t-mono" x="710" y="340" text-anchor="middle">SSL bump · PROXY_IP .101</text>
+        <text class="t-mono" x="710" y="358" text-anchor="middle">ip_forward=0 · own resolver</text>
+
+        <line class="e-in" x1="230" y1="254" x2="230" y2="294" marker-end="url(#a-in)"/>
+        <text class="t-edge c-in" x="239" y="280">:80 :8080 :4000 :9119</text>
+        <line class="e-proxy" x1="710" y1="296" x2="710" y2="256" marker-end="url(#a-proxy)"/>
+        <text class="t-edge c-proxy" x="719" y="280">80/443 · DNS → router</text>
+
+        <line class="e-in" x1="230" y1="372" x2="230" y2="418" marker-end="url(#a-in)"/>
+        <text class="t-edge c-in" x="239" y="400">by *.as.internal name</text>
+        <line class="e-proxy" x1="710" y1="420" x2="710" y2="374" marker-end="url(#a-proxy)"/>
+        <text class="t-edge c-proxy" x="719" y="400">:3128 proxy.as.internal</text>
+
+        <!-- no route out -->
+        <line class="e-block" x1="470" y1="420" x2="470" y2="258"/>
+        <path class="e-x" d="M461 296 L479 314 M479 296 L461 314"/>
+        <text class="t-edge c-block" x="482" y="340">no route out,</text>
+        <text class="t-edge c-block" x="482" y="354">even with NET_ADMIN</text>
+
+        <!-- as-net-litellm-egress: its own network, outside as-net-blind -->
+        <rect class="z-llm" x="996" y="296" width="64" height="420" rx="8"/>
+        <text class="t-zone c-llm" transform="translate(1033 470) rotate(-90)" text-anchor="middle">as-net-litellm-egress · internal</text>
+        <text class="t-mono" transform="translate(1050 470) rotate(-90)" text-anchor="middle">LLM_EGRESS_SUBNET</text>
+        <line class="e-llm" x1="820" y1="334" x2="996" y2="334"/>
+        <circle class="dot-llm" cx="996" cy="334" r="5"/>
+        <text class="t-edge c-llm" x="834" y="326">llm-proxy.as.internal</text>
+        <text class="t-mono" x="834" y="354">openrouter.ai, lan.hosts:</text>
+        <text class="t-mono" x="834" y="370">from this network only</text>
+
+        <!-- as-net-blind -->
+        <rect class="z-blind" x="30" y="420" width="950" height="350" rx="10"/>
+        <text class="t-zone c-in" x="48" y="444">as-net-blind · internal · BLIND_SUBNET · Docker assigns addresses (BLIND_IP_RANGE)</text>
+
+        <!-- row A: Open WebUI (no sidecar) and four containers behind their sidecars -->
+        <rect class="node" x="42" y="456" width="140" height="104" rx="8"/>
+        <text class="t-title" x="52" y="482">as-open-webui</text>
+        <text class="t-mono" x="52" y="502">:8080</text>
+        <text class="t-mono" x="52" y="520">no sidecar</text>
+
+        <rect class="sidecar" x="192" y="456" width="185" height="104" rx="8"/>
+        <text class="t-fw" x="202" y="472">sidecar as-hermes-net</text>
+        <rect class="node" x="200" y="480" width="169" height="72" rx="6"/>
+        <text class="t-title" x="210" y="502">as-hermes</text>
+        <text class="t-mono" x="210" y="521">dashboard :9119</text>
+        <text class="t-mono" x="210" y="539">in: ingress, netshoot</text>
+
+        <rect class="sidecar" x="389" y="456" width="175" height="104" rx="8"/>
+        <text class="t-fw" x="399" y="472">sidecar as-netshoot-net</text>
+        <rect class="node" x="397" y="480" width="159" height="72" rx="6"/>
+        <text class="t-title" x="407" y="502">as-netshoot</text>
+        <text class="t-mono" x="407" y="521">out: all as-net-blind</text>
+        <text class="t-mono" x="407" y="539">in: none</text>
+
+        <rect class="sidecar" x="576" y="456" width="185" height="104" rx="8"/>
+        <text class="t-fw" x="586" y="472">sidecar as-claude-net</text>
+        <rect class="node" x="584" y="480" width="169" height="72" rx="6"/>
+        <text class="t-title" x="594" y="502">as-claude-main</text>
+        <text class="t-mono" x="594" y="521">Claude Code agent</text>
+        <text class="t-mono" x="594" y="539">out: proxy · in: netshoot</text>
+
+        <rect class="sidecar" x="773" y="456" width="202" height="104" rx="8"/>
+        <text class="t-fw" x="783" y="472">sidecar as-claude-bridge-net</text>
+        <rect class="node" x="781" y="480" width="186" height="72" rx="6"/>
+        <text class="t-title" x="791" y="502">as-claude-bridge</text>
+        <text class="t-mono" x="791" y="521">OpenAI API :9090</text>
+        <text class="t-mono" x="791" y="539">in: LiteLLM, netshoot</text>
+
+        <!-- row B -->
+        <rect class="dnsbox" x="50" y="620" width="270" height="96" rx="8"/>
+        <text class="t-title" x="64" y="644">as-dns</text>
+        <text class="t-mono" x="64" y="664">CoreDNS · DNS_IP (fixed)</text>
+        <text class="t-mono" x="64" y="682">as.internal → 127.0.0.11</text>
+        <text class="t-mono" x="64" y="700">rest: NXDOMAIN · logged</text>
+
+        <!-- LiteLLM straddles as-net-blind and as-net-litellm-egress (and the DB network below) -->
+        <rect class="gw" x="700" y="620" width="330" height="90" rx="8" style="stroke:var(--c-llm)"/>
+        <text class="t-title" x="714" y="644">as-litellm</text>
+        <text class="t-mono" x="714" y="664">:4000 · /ui · no sidecar</text>
+        <text class="t-mono" x="714" y="682">proxy: llm-proxy.as.internal</text>
+        <text class="t-mono" x="714" y="700">legs: blind · litellm-egress · litellm-db</text>
+        <circle class="dot-llm" cx="1030" cy="665" r="5"/>
+
+        <!-- clients -> LiteLLM :4000 -->
+        <path class="e-proxy" d="M115 560 L115 590 L640 590 L640 665 L698 665" marker-end="url(#a-proxy)"/>
+        <line class="e-proxy" x1="285" y1="560" x2="285" y2="590"/>
+        <circle class="dot-proxy" cx="285" cy="590" r="4"/>
+        <text class="t-edge c-proxy" x="520" y="583">:4000</text>
+        <!-- LiteLLM -> bridge -->
+        <line class="e-proxy" x1="870" y1="620" x2="870" y2="562" marker-end="url(#a-proxy)"/>
+        <text class="t-edge c-proxy" x="879" y="600">:9090</text>
+
+        <text class="t-mono" x="340" y="650">every container asks as-dns :53;</text>
+        <text class="t-mono" x="340" y="668">sidecars block 127.0.0.11 and</text>
+        <text class="t-mono" x="340" y="686">re-resolve peer names (fw.sh)</text>
+        <text class="t-mono" x="48" y="752">sidecar fw.sh: default DROP, named ALLOW_IN/ALLOW_OUT, anti-spoofing, IPv6 fail-closed</text>
+
+        <!-- DB network -->
+        <line class="e-db" x1="810" y1="710" x2="810" y2="800"/>
+        <rect class="z-db" x="560" y="800" width="420" height="84" rx="10"/>
+        <text class="t-zone" x="576" y="822">as-net-litellm-db · internal · DB_SUBNET</text>
+        <rect class="node" x="576" y="832" width="180" height="40" rx="6"/>
+        <text class="t-mono" x="666" y="856" text-anchor="middle" style="fill:var(--fg)">as-litellm-db (Postgres)</text>
+        <rect class="node" x="776" y="832" width="188" height="40" rx="6"/>
+        <text class="t-mono" x="870" y="856" text-anchor="middle" style="fill:var(--fg)">as-litellm-keys (job)</text>
+      </svg>

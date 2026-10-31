@@ -1,0 +1,57 @@
+# as-ingress: the GUIs of as-net-blind on the VLAN (INGRESS_IP), one port per GUI.
+# Caddy listens only on its VLAN leg and resolves the services by their
+# *.as.internal names. Access log: docker compose logs as-ingress.
+#
+# A site preceded by a marker line is listed on the dashboard (:80):
+#   # @dashboard <name> | <description> | <path>      (description and path optional)
+# The marker must be the line right above ":<port> {".
+{
+	admin off
+	auto_https off
+	persist_config off
+}
+
+(common) {
+	bind {$INGRESS_IP}
+	log
+}
+
+# Open WebUI (its own login)
+# @dashboard Open WebUI | chat for users (its own login)
+:8080 {
+	import common
+	reverse_proxy open-webui.as.internal:8080
+}
+
+# LiteLLM API and /ui (UI login: LITELLM_MASTER_KEY)
+# @dashboard LiteLLM | admin UI, login with the master key | /ui
+:4000 {
+	import common
+	reverse_proxy litellm.as.internal:4000
+}
+
+# Hermes dashboard: only from HERMES_DASHBOARD_ALLOW_FROM
+# @dashboard Hermes | agent dashboard, only from HERMES_DASHBOARD_ALLOW_FROM
+:9119 {
+	import common
+	@allowed remote_ip {$HERMES_DASHBOARD_ALLOW_FROM}
+	handle @allowed {
+		reverse_proxy hermes.as.internal:9119
+	}
+	respond "Blocked by agents-sandbox ingress policy" 403
+}
+
+# Dashboard: links to the marked sites, built from this file on every request
+# (ingress/dashboard.html). Only from INGRESS_DASHBOARD_ALLOW_FROM. Every path
+# serves the dashboard, so neither this file nor anything else in /etc/caddy is served.
+:80 {
+	import common
+	@allowed remote_ip {$INGRESS_DASHBOARD_ALLOW_FROM}
+	handle @allowed {
+		root * /etc/caddy
+		rewrite * /dashboard.html
+		templates
+		file_server
+	}
+	respond "Blocked by agents-sandbox ingress policy" 403
+}

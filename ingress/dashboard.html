@@ -1,0 +1,60 @@
+<!doctype html>
+{{- /* Caddy template: lists the sites of the Caddyfile marked "# @dashboard". */ -}}
+{{- $sites := regexFindAll "(?m)^# @dashboard [^\n]*\n:[0-9]+" (include "Caddyfile") -1 }}
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>agents-sandbox</title>
+<style>
+  :root { --bg: #f7f7f5; --fg: #1d1d1b; --muted: #6b6b66; --card: #fff; --line: #e2e2dc;
+          --up: #2f8f46; --down: #c0392b; --unk: #a0a09a; --link: #1f5fbf; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #161615; --fg: #ecece8; --muted: #9a9a94; --card: #20201e; --line: #33332f;
+            --up: #4cbb67; --down: #e0675a; --unk: #6b6b66; --link: #7aa7ee; }
+  }
+  body { margin: 0; background: var(--bg); color: var(--fg);
+         font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 760px; margin: 0 auto; padding: 32px 16px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  p.sub { color: var(--muted); margin: 0 0 24px; }
+  ul { list-style: none; padding: 0; margin: 0; display: grid; gap: 10px; }
+  li a { display: flex; gap: 12px; align-items: baseline; padding: 14px 16px; background: var(--card);
+         border: 1px solid var(--line); border-radius: 8px; color: inherit; text-decoration: none; }
+  li a:hover { border-color: var(--link); }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--unk); flex: none; align-self: center; }
+  .dot.up { background: var(--up); } .dot.down { background: var(--down); }
+  .name { font-weight: 600; color: var(--link); }
+  .desc { color: var(--muted); flex: 1; }
+  .url { color: var(--muted); font: 13px ui-monospace, monospace; }
+  footer { color: var(--muted); font-size: 13px; margin-top: 24px; }
+</style>
+</head>
+<body>
+<main>
+<h1>agents-sandbox</h1>
+<p class="sub">Services published by as-ingress on {{html .Host}}</p>
+<ul>
+{{- range $sites }}
+  {{- $lines := splitList "\n" . }}
+  {{- $f := splitList "|" (trimPrefix "# @dashboard " (index $lines 0)) }}
+  {{- $port := trimPrefix ":" (index $lines 1) }}
+  {{- $desc := "" }}{{ if gt (len $f) 1 }}{{ $desc = trim (index $f 1) }}{{ end }}
+  {{- $path := "/" }}{{ if gt (len $f) 2 }}{{ $path = trim (index $f 2) }}{{ end }}
+  {{- $url := printf "http://%s:%s%s" $.Host $port $path }}
+  <li><a href="{{html $url}}"><span class="dot"></span><span class="name">{{html (trim (index $f 0))}}</span><span class="desc">{{html $desc}}</span><span class="url">:{{html $port}}{{html $path}}</span></a></li>
+{{- end }}
+</ul>
+<footer>The dot shows whether your browser reaches the port (a 403 counts as reachable). The list comes from the "# @dashboard" lines in ingress/Caddyfile.</footer>
+</main>
+<script>
+  for (const a of document.querySelectorAll("li a")) {
+    const dot = a.querySelector(".dot");
+    const ctl = new AbortController();
+    setTimeout(() => ctl.abort(), 4000);
+    fetch(a.href, { mode: "no-cors", cache: "no-store", signal: ctl.signal })
+      .then(() => dot.classList.add("up"), () => dot.classList.add("down"));
+  }
+</script>
+</body>
+</html>

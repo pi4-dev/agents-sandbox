@@ -1,0 +1,7 @@
+# llm_api_domains.txt
+# API hosts of LLM providers (litellm/models/*.yaml). Reachable through Squid from
+# LiteLLM only (its own network to Squid, as-net-litellm-egress), never from the agents: an
+# agent with someone else's API key could otherwise send data to that account.
+# LAN endpoints do not go here: squid/conf/lan.hosts (*.lan.internal).
+
+openrouter.ai

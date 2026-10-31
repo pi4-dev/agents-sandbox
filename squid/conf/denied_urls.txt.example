@@ -1,0 +1,10 @@
+# denied_urls.txt
+# checked before allow, on all decrypted traffic
+
+# block push (smart-HTTP receive-pack)
+/git-receive-pack$
+
+# traversal as a path segment (literal and encoded)
+/\.\./
+/%2e%2e
+%2e%2e/

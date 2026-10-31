@@ -1,0 +1,30 @@
+# as-dns: DNS for as-net-blind, the internal network of the agents.
+#
+# *.as.internal are Docker network aliases (docker-compose.yaml). as-dns asks
+# Docker's embedded DNS (127.0.0.11) for them, so no address is written here.
+# as-dns sits only on as-net-blind, an internal network: Docker answers names of that
+# network and forwards nothing to an outside resolver (tests/dns/run-dns-tests.sh),
+# so an unknown *.as.internal name fails instead of leaking.
+#
+# Every other name: NXDOMAIN, without asking anyone. DNS is not a data
+# exfiltration channel (subdomain tunneling); internet names are resolved by
+# Squid itself, for requests that passed its ACLs. Every query is logged
+# (docker compose logs as-dns).
+
+as.internal {
+    forward . 127.0.0.11
+    log
+    errors
+}
+
+. {
+    template ANY ANY {
+        rcode NXDOMAIN
+    }
+    log
+    errors
+}
+
+# Your additions: dns/local.d/*.conf (git-ignored, see dns/local.d/README.md).
+# Restart as-dns after a change.
+import /etc/coredns/local.d/*.conf

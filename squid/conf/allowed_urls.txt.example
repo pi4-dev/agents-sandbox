@@ -1,0 +1,28 @@
+# allowed_urls.txt
+# applies only to path_domains (GitHub); matched on the decrypted URL
+
+# your organization: uncomment and replace CHANGE_ME_GITHUB_ORG
+#^https://github\.com/CHANGE_ME_GITHUB_ORG/
+#^https://api\.github\.com/repos/CHANGE_ME_GITHUB_ORG/
+#^https://raw\.githubusercontent\.com/CHANGE_ME_GITHUB_ORG/
+
+# azure
+^https://github\.com/Azure/
+^https://api\.github\.com/repos/Azure/
+^https://raw\.githubusercontent\.com/Azure/
+
+# grafana
+^https://github\.com/grafana/
+^https://api\.github\.com/repos/grafana/
+^https://raw\.githubusercontent\.com/grafana/
+
+^https://raw\.githubusercontent\.com/BerriAI/litellm/main/model_prices_and_context_window\.json
+
+# debian
+^http://ftp\.pl\.debian\.org/debian
+^https://ftp\.pl\.debian\.org/debian
+^http://security\.debian\.org/debian-security
+^https://security\.debian\.org/debian-security
+
+
+

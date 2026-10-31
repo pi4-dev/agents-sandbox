@@ -1,0 +1,12 @@
+# Models are defined per provider in litellm/models/*.yaml (one file per API endpoint).
+# Adding a provider: litellm/models/README.md.
+include:
+  - models/claude-local.yaml
+  - models/openrouter.yaml
+
+litellm_settings:
+  drop_params: true
+  request_timeout: 300
+general_settings:
+  trusted_proxy_ranges: []
+  master_key: os.environ/LITELLM_MASTER_KEY

@@ -1,0 +1,43 @@
+# Hermes Agent + existing LiteLLM.
+# DIRECT CONNECTION: litellm.as.internal is resolved by as-dns, covered by NO_PROXY
+# (.as.internal in proxy.env) and allowed in ALLOW_OUT of as-hermes-net.
+# Secrets come from docker environment, not from this file.
+providers:
+  litellm:
+    api: "http://litellm.as.internal:4000/v1"
+    api_key: ${LITELLM_API_KEY}
+    transport: chat_completions
+
+model:
+  provider: litellm
+  # a model_name from litellm/models/*.yaml. Change it here, then
+  # `docker compose up -d --force-recreate as-hermes`: this file is mounted read-only,
+  # so the dashboard cannot save model changes ("Failed to save model assignment").
+  default: "claude-sub"
+
+
+auxiliary:
+  vision:
+    provider: main
+  web_extract:
+    provider: main
+  compression:
+    provider: main
+  title_generation:
+    provider: main
+  session_search:
+    provider: main
+
+terminal:
+  backend: local
+  home_mode: profile
+  cwd: /workspace
+
+
+updates:
+  check: false
+
+# LAB YOLO mode: do not prompt for dangerous shell commands.
+approvals:
+  mode: false
+_config_version: 51

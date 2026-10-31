@@ -1,0 +1,9 @@
+# Local Claude: the OpenAI-compatible bridge (as-claude-bridge, claude-bridge/server.mjs)
+# behind its own sidecar (as-claude-bridge-net). Reached directly (inside as-net-blind, NO_PROXY).
+#   key: CLAUDE_OAI_KEY in litellm/litellm.env and claude-bridge/claude-bridge.env (gen-secrets.sh)
+model_list:
+  - model_name: claude-sub
+    litellm_params:
+      model: openai/claude-subscription
+      api_base: http://claude-bridge.as.internal:9090/v1
+      api_key: os.environ/CLAUDE_OAI_KEY

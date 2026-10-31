@@ -1,0 +1,13 @@
+# allowed_domains.txt
+
+# Claude Code
+api.anthropic.com
+claude.ai
+claude.com
+platform.claude.com
+statsig.anthropic.com
+code.claude.com
+
+# optional
+registry.npmjs.org
+

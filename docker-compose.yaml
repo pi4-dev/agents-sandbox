@@ -1,0 +1,517 @@
+# The project name determines volume and network names (agents-sandbox_as-litellm-db_pg_data,
+# agents-sandbox_as-net-blind, ...). Changing it means a new, empty LiteLLM database volume
+# unless the data is copied over.
+name: agents-sandbox
+
+x-fw-sidecar: &fw-sidecar
+  image: ${NETSHOOT_IMAGE:-nicolaka/netshoot:latest}
+  init: true
+  cap_add: [NET_ADMIN]
+  command: ["sh", "/fw.sh"]
+  depends_on:
+    as-dns: { condition: service_started }   # fw.sh waits until as-dns answers
+    as-squid: { condition: service_healthy }
+  healthcheck:
+    test: ["CMD", "test", "-f", "/tmp/ready"]
+    interval: 2s
+    retries: 10
+  restart: unless-stopped
+
+x-fw-env: &fw-env
+  PROXY_HOST: proxy.as.internal          # port: fw.sh's default 3128, fixed like squid.conf
+  # the only address in the sidecar config: a DNS server cannot be a name
+  DNS_IP: ${DNS_IP:?set it in .env (see .env.example)}
+
+# Shared image of the Claude agent and the OpenAI bridge (same build, one tag).
+x-claude-image: &claude-image
+  build:
+    context: ./claude-main
+    additional_contexts:
+      ssl: ./ssl
+    args:
+      CLAUDE_CODE_VERSION: ${CLAUDE_CODE_VERSION:-latest}
+  # the proxy CA is baked in: build on every `up` (cached, quick) so a new CA reaches it
+  image: agents-sandbox/claude
+  pull_policy: build
+
+# Dual-homed gateways (as-squid, as-ingress) must not route between their legs:
+# Docker starts every container with ip_forward=1, which would make them routers
+# from as-net-blind to the VLAN for any agent that sets its own route. (IPv6: the
+# networks have no IPv6 and IPv6 forwarding starts at 0 in a new namespace.)
+x-no-forwarding: &no-forwarding
+  net.ipv4.ip_forward: 0
+  net.ipv4.conf.all.forwarding: 0
+
+x-bounded-logs: &bounded-logs
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  as-hermes-net:
+    <<: *fw-sidecar
+    container_name: as-hermes-net
+    hostname: hermes
+    environment:
+      <<: *fw-env
+      FW_LOG: 1
+      # dashboard through as-ingress (which checks HERMES_DASHBOARD_ALLOW_FROM);
+      # everything from as-netshoot, the network diagnostics container
+      ALLOW_IN: >-
+        tcp:9119:ingress.as.internal
+        any::netshoot.as.internal
+      ALLOW_OUT: >-
+        tcp:litellm.as.internal:4000
+    volumes:
+      - ./fw/fw.sh:/fw.sh:ro
+    networks:
+      as-net-blind:
+        aliases: [hermes.as.internal]
+
+# - - - - - - - - - - - - - - - - - - - - - -
+
+  as-hermes:
+    image: ${HERMES_IMAGE:-nousresearch/hermes-agent:stable}
+    container_name: as-hermes
+    restart: unless-stopped
+
+    # Keep the official entrypoint (s6-overlay). Do NOT set user: 0:0.
+    # The entrypoint switches to the PUID/PGID service user (must stay nonzero).
+    command: ["gateway", "run"]
+
+    # Not privileged: the agent process (approvals off, YOLO) cannot change the
+    # firewall in the shared as-hermes-net namespace or reach host devices and
+    # mounts. Full-trust (LAB) mode is opt-in:
+    #   docker compose -f docker-compose.yaml -f compose.hermes-privileged.yaml up -d
+    # The Docker socket is NOT mounted.
+
+    depends_on:
+      as-litellm: { condition: service_healthy }
+      as-litellm-keys: { condition: service_completed_successfully }
+      as-hermes-net: { condition: service_healthy }
+
+    volumes:
+      - ./hermes/data:/opt/data:rw
+      - ./hermes/config.yaml:/opt/data/config.yaml:ro
+      - ./hermes/workspace:/workspace:rw
+
+    network_mode: service:as-hermes-net
+
+    env_file:
+      - proxy.env
+      - hermes/hermes.env
+
+    shm_size: "1g"
+
+    logging: *bounded-logs
+
+# -----------------------------------------------------
+
+  as-open-webui:
+    image: ${OPEN_WEBUI_IMAGE:-ghcr.io/open-webui/open-webui:main}
+    container_name: as-open-webui
+    restart: unless-stopped
+    env_file:
+      - open-webui/open-webui.env
+    # Docker's embedded DNS answers the *.as.internal aliases itself and sends
+    # every other query to as-dns (logged, NXDOMAIN)
+    dns: ["${DNS_IP}"]
+    dns_search: [as.internal]
+    depends_on:
+      as-litellm: { condition: service_healthy }
+      as-litellm-keys: { condition: service_completed_successfully }
+    volumes:
+      - ./open-webui/data:/app/backend/data
+    networks:
+      as-net-blind:
+        aliases: [open-webui.as.internal]   # GUI :8080 through as-ingress
+
+
+# -----------------------------------------------------
+
+  as-litellm:
+    image: ${LITELLM_IMAGE:-ghcr.io/berriai/litellm:main-stable}
+    container_name: as-litellm
+    restart: unless-stopped
+    #ports:
+    #  - "4000:4000"
+    env_file:
+      - ./litellm/litellm.env
+      - proxy.env
+    environment:
+      # Squid over as-net-litellm-egress, a network only LiteLLM and Squid are on: the one
+      # leg from which Squid serves the LLM provider APIs (llm_api_domains.txt)
+      HTTP_PROXY: &litellm-proxy http://llm-proxy.as.internal:3128
+      HTTPS_PROXY: *litellm-proxy
+      http_proxy: *litellm-proxy
+      https_proxy: *litellm-proxy
+    # Docker's embedded DNS answers the aliases of LiteLLM's networks (as-litellm-db,
+    # llm-proxy.as.internal, ...) and sends the rest to as-dns
+    dns: ["${DNS_IP}"]
+    dns_search: [as.internal]
+    depends_on:
+      as-dns: { condition: service_started }
+      as-claude-bridge: { condition: service_started }
+      as-litellm-db: { condition: service_healthy }
+    networks:
+      as-net-blind:
+        aliases: [litellm.as.internal]
+      as-net-litellm-db: {}
+      as-net-litellm-egress: {}
+    volumes:
+      - ./litellm/litellm-config.yaml:/app/config.yaml:ro
+      - ./litellm/models:/app/models:ro      # one file per API endpoint (include: in the config)
+      - ./ssl/squid-ca.crt:/certs/proxy-ca.crt:ro
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request,sys; sys.exit(0) if urllib.request.urlopen('http://127.0.0.1:4000/health/liveliness',timeout=4).status==200 else sys.exit(1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+# - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+  # One-shot job: registers the client keys from hermes.env / open-webui.env as
+  # LiteLLM virtual keys (values generated beforehand by gen-secrets.sh), so the
+  # stack comes up in one `docker compose up`. Idempotent; a changed value rotates
+  # the key and keeps its settings (models, budgets set in the LiteLLM UI).
+  as-litellm-keys:
+    image: ${LITELLM_IMAGE:-ghcr.io/berriai/litellm:main-stable}
+    container_name: as-litellm-keys
+    entrypoint: ["python3", "/scripts/litellm-keys.py"]
+    env_file:
+      - ./litellm/litellm.env
+      - hermes/hermes.env
+      - open-webui/open-webui.env
+    environment:
+      LITELLM_URL: http://as-litellm:4000
+      # alias in LiteLLM = env variable holding the key
+      LITELLM_CLIENT_KEYS: "hermes=LITELLM_API_KEY open-webui=OPENAI_API_KEY"
+    volumes:
+      - ./litellm/litellm-keys.py:/scripts/litellm-keys.py:ro
+    networks:
+      as-net-litellm-db: {}        # internal network only: reaches as-litellm, nothing else
+    depends_on:
+      as-litellm: { condition: service_healthy }
+    restart: "no"
+
+# - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+  as-litellm-db:
+    image: ${POSTGRES_IMAGE:-postgres:16-alpine}
+    container_name: as-litellm-db
+    restart: unless-stopped
+    env_file:
+      - ./litellm/litellm-db.env
+    volumes:
+    #  - ./litellm/db:/var/lib/postgresql/data
+      - as-litellm-db_pg_data:/var/lib/postgresql/data
+    networks:
+      as-net-litellm-db: { }
+
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER:-litellm}\" -d \"$${POSTGRES_DB:-litellm}\""]
+      interval: 10s
+      retries: 5
+
+
+# -----------------------------------------------------
+
+  as-squid:
+    build: ./squid
+    # entrypoint.sh is baked in: build on every `up` (cached, quick) so a changed
+    # entrypoint never runs on a stale image
+    image: agents-sandbox/squid
+    pull_policy: build
+    container_name: as-squid
+    hostname: as-squid
+    init: true
+    environment:
+      # acl localnet (entrypoint.sh writes it to a file)
+      SQUID_LOCALNET: >-
+        ${BLIND_SUBNET:?set it in .env (see .env.example)}
+        ${LLM_EGRESS_SUBNET:?set it in .env (see .env.example)} ${SQUID_LOCALNET_EXTRA:-}
+      # only the as-net-litellm-egress leg (LiteLLM) may reach squid/conf/llm_api_domains.txt
+      SQUID_LITELLM_NET: ${LLM_EGRESS_SUBNET}
+      # Squid resolves internet names itself, over its VLAN leg (dns_nameservers);
+      # LAN hosts come from squid/conf/lan.hosts
+      SQUID_DNS_UPSTREAM: ${SQUID_DNS_UPSTREAM:?set it in .env (see .env.example)}
+    #ports:
+    #  - "3128:3128"
+
+    # the egress gateway: one leg on the VLAN, one in each internal network, no routing
+    networks:
+      as-net-vlan:
+        ipv4_address: ${PROXY_IP}
+      as-net-blind:
+        aliases: [proxy.as.internal]
+      as-net-litellm-egress:
+        aliases: [llm-proxy.as.internal]
+    sysctls: *no-forwarding
+    volumes:
+      # whole directory (not single files): edit + reload_squid.sh sees the new content
+      - ./squid/conf:/etc/squid/conf:ro
+      - ./squid/logs:/var/log/squid
+      - ./ssl/squid-ca.crt:/etc/squid/ssl/squid-ca.crt:ro
+      - ./ssl/squid-ca.key:/etc/squid/ssl/squid-ca.key:ro
+      - ./squid/errors:/etc/squid/errors:ro
+    tmpfs:
+      - /var/lib/squid:uid=13,gid=13,mode=0750
+    ulimits:
+      nofile:
+        soft: 65535
+        hard: 65535
+    healthcheck:
+      # process alive and config parses (sidecars wait for healthy)
+      test: ["CMD", "squid", "-k", "check", "-f", "/etc/squid/conf/squid.conf"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+    restart: unless-stopped
+
+# -----------------------------------------------------
+
+  as-netshoot-net:
+    <<: *fw-sidecar
+    container_name: as-netshoot-net
+    hostname: as-netshoot-net
+    environment:
+      <<: *fw-env
+      # network diagnostics: anything to anyone in as-net-blind (TCP, UDP, ping), nothing
+      # inbound; the other sidecars admit it with ALLOW_IN any::netshoot.as.internal
+      ALLOW_OUT: >-
+        any:${BLIND_SUBNET:?set it in .env (see .env.example)}
+    volumes:
+      - ./fw/fw.sh:/fw.sh:ro
+    networks:
+      as-net-blind:
+        aliases: [netshoot.as.internal]
+
+# - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+  as-netshoot:
+    image: ${NETSHOOT_IMAGE:-nicolaka/netshoot:latest}
+    container_name: as-netshoot
+    init: true
+    depends_on:
+      as-netshoot-net:
+        condition: service_healthy
+    env_file:
+      - proxy.env
+    environment:
+      # the system bundle, which gets the proxy CA at start (Python requests has its own otherwise)
+      REQUESTS_CA_BUNDLE: /etc/ssl/certs/ca-certificates.crt
+    volumes:
+      # Squid bumps all TLS: trust its CA (added to the system store at start)
+      - ./ssl/squid-ca.crt:/usr/local/share/ca-certificates/proxy-ca.crt:ro
+    command:
+      - sh
+      - -c
+      - |
+        update-ca-certificates >/dev/null 2>&1 || echo "as-netshoot: update-ca-certificates failed" >&2
+        trap 'exit 0' TERM INT
+        sleep infinity & wait
+    network_mode: service:as-netshoot-net
+    restart: unless-stopped
+
+# -----------------------------------------------------
+  # the Claude agent's sidecar: proxy only, nothing inbound but as-netshoot (diagnostics)
+  as-claude-net:
+    <<: *fw-sidecar
+    container_name: as-claude-net
+    hostname: claude
+    environment:
+      <<: *fw-env
+      ALLOW_IN: >-
+        any::netshoot.as.internal
+      FW_LOG: 1
+    volumes:
+      - ./fw/fw.sh:/fw.sh:ro
+    networks:
+      as-net-blind:
+        aliases: [claude.as.internal, dev-ws01.as.internal]
+
+# - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+  as-claude-main:
+    <<: *claude-image
+    container_name: as-claude-main
+    #init: true
+    network_mode: service:as-claude-net
+    depends_on:
+      as-claude-net:
+        condition: service_healthy
+    env_file:
+      - proxy.env
+      - claude-main/claude.env
+    volumes:
+      - ./claude-main/data/workspace:/workspace
+      - ./claude-main/data/claude-home:/home/node        # login and settings survive restarts
+      - ./claude-main/policy:/etc/claude-code:ro
+      - ./claude-main/CLAUDE.md:/home/node/.claude/CLAUDE.md:ro
+      # /etc/hosts and /etc/resolv.conf come from as-claude-net (resolv.conf -> as-dns)
+      #- ./ssl/ca.crt:/usr/local/share/ca-certificates/proxy-ca.crt:ro
+    stdin_open: true
+    tty: true
+    restart: unless-stopped
+    # the OpenAI bridge runs in as-claude-bridge; this is only for agent sessions (start-main.sh)
+    command: ["sh", "-c", "trap 'exit 0' TERM INT; sleep infinity & wait"]
+
+# - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+  # the bridge's sidecar: proxy, and :9090 from LiteLLM only
+  as-claude-bridge-net:
+    <<: *fw-sidecar
+    container_name: as-claude-bridge-net
+    hostname: claude-bridge
+    environment:
+      <<: *fw-env
+      ALLOW_IN: >-
+        tcp:9090:litellm.as.internal
+        any::netshoot.as.internal
+      FW_LOG: 1
+    volumes:
+      - ./fw/fw.sh:/fw.sh:ro
+    networks:
+      as-net-blind:
+        aliases: [claude-bridge.as.internal]
+
+# - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+  # OpenAI-compatible bridge (claude-bridge/server.mjs) for LiteLLM (model claude-sub).
+  # Independent of the agent: its own image (code and dependencies baked in, owned by
+  # root, read-only root filesystem), sidecar and namespace (only LiteLLM reaches :9090),
+  # env file, workspace and home; no policy or CLAUDE.md of claude-main (docs/CLAUDE_BRIDGE.md).
+  as-claude-bridge:
+    build:
+      context: ./claude-bridge
+      additional_contexts:
+        ssl: ./ssl
+      args:
+        CLAUDE_CODE_VERSION: ${CLAUDE_CODE_VERSION:-latest}
+    image: agents-sandbox/claude-bridge
+    pull_policy: build                     # code and proxy CA are baked in
+    container_name: as-claude-bridge
+    init: true
+    network_mode: service:as-claude-bridge-net
+    depends_on:
+      as-claude-bridge-net:
+        condition: service_healthy
+    env_file:
+      - proxy.env
+      - claude-bridge/claude-bridge.env
+    environment:
+      # fixed: ALLOW_IN of as-claude-bridge-net and api_base in litellm/models/claude-local.yaml
+      PORT: "9090"
+      CLAUDE_OAI_HOST: 0.0.0.0
+    volumes:
+      - ${CLAUDE_BRIDGE_WORKSPACE:-./claude-bridge/workspace}:/workspace   # session cwd, system prompt
+      - ${CLAUDE_BRIDGE_HOME:-./claude-bridge/home}:/home/node             # its own Claude login
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    healthcheck:
+      # /healthz on 9090 = ALLOW_IN of as-claude-bridge-net and api_base in LiteLLM
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:9090/healthz').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+    logging: *bounded-logs
+
+
+# -----------------------------------------------------
+
+  # Internal DNS (CoreDNS): *.as.internal from Docker's embedded DNS (the network
+  # aliases below), nothing else, every query logged (dns/Corefile). Only on as-net-blind,
+  # an internal network: Docker forwards none of its queries to an outside resolver.
+  as-dns:
+    image: ${COREDNS_IMAGE:-coredns/coredns:1.12.4}
+    container_name: as-dns
+    hostname: as-dns
+    command: ["-conf", "/etc/coredns/Corefile"]
+    volumes:
+      - ./dns:/etc/coredns:ro
+    networks:
+      as-net-blind:
+        # fixed: resolv.conf and dns: need an address; outside BLIND_IP_RANGE
+        ipv4_address: ${DNS_IP:?set it in .env (see .env.example)}
+        aliases: [dns.as.internal]
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]
+    security_opt: ["no-new-privileges:true"]
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "10"
+
+# -----------------------------------------------------
+
+  # Ingress: the only way into as-net-blind. Caddy on the VLAN (INGRESS_IP) forwards the
+  # GUI ports to their services by name (ingress/Caddyfile); it does not route.
+  as-ingress:
+    image: ${CADDY_IMAGE:-caddy:2.8.4-alpine}
+    container_name: as-ingress
+    restart: unless-stopped
+    environment:
+      INGRESS_IP: ${INGRESS_IP:?set it in .env (see .env.example)}
+      HERMES_DASHBOARD_ALLOW_FROM: ${HERMES_DASHBOARD_ALLOW_FROM:?set it in .env (see .env.example)}
+      INGRESS_DASHBOARD_ALLOW_FROM: ${INGRESS_DASHBOARD_ALLOW_FROM:?set it in .env (see .env.example)}
+    volumes:
+      - ./ingress:/etc/caddy:ro      # Caddyfile and dashboard.html (a directory: edits are seen)
+    tmpfs: [/data, /config]
+    dns: ["${DNS_IP}"]
+    depends_on:
+      as-dns: { condition: service_started }
+    networks:
+      as-net-vlan:
+        ipv4_address: ${INGRESS_IP}
+      as-net-blind:
+        aliases: [ingress.as.internal]
+    sysctls: *no-forwarding
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]      # the image's caddy binary carries this file capability
+    security_opt: ["no-new-privileges:true"]
+    logging: *bounded-logs
+
+# -----------------------------------------------------
+
+networks:
+  # the VLAN: only the outer legs of as-squid (egress) and as-ingress (GUIs)
+  as-net-vlan:
+    driver: macvlan
+    driver_opts:
+      parent: ${VLAN_PARENT:?set it in .env (see .env.example)}
+    ipam:
+      config:
+        - subnet: ${VLAN_SUBNET:?set it in .env (see .env.example)}
+          gateway: ${VLAN_GATEWAY:?set it in .env (see .env.example)}
+          ip_range: ${VLAN_IP_RANGE:?set it in .env (see .env.example)}
+  # agents, LiteLLM, Open WebUI, as-dns: no route out; the way out is as-squid,
+  # the way in as-ingress. Docker assigns the addresses from BLIND_IP_RANGE.
+  as-net-blind:
+    internal: true
+    ipam:
+      config:
+        - subnet: ${BLIND_SUBNET:?set it in .env (see .env.example)}
+          ip_range: ${BLIND_IP_RANGE:?set it in .env (see .env.example)}
+  # LiteLLM <-> Squid only (provider APIs)
+  as-net-litellm-egress:
+    internal: true
+    ipam: { config: [ { subnet: "${LLM_EGRESS_SUBNET:?set it in .env (see .env.example)}" } ] }
+  as-net-litellm-db:
+    internal: true                 # no gateway: does not take over the default route
+    ipam: { config: [ { subnet: "${DB_SUBNET:?set it in .env (see .env.example)}" } ] }
+
+
+volumes:
+  as-litellm-db_pg_data:

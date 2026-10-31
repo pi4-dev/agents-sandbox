@@ -1,0 +1,6 @@
+<html><head><title>403 Blocked by agents-sandbox proxy policy</title></head><body>
+<h1>Blocked by agents-sandbox proxy policy</h1>
+<p>Request: %M %U</p>
+<p>The destination, path or HTTP method is not on the proxy allowlist.
+Do not try to bypass the proxy. Report the host and why it is needed to the operator.</p>
+</body></html>

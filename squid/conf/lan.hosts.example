@@ -1,0 +1,5 @@
+# Hosts outside this stack that LiteLLM may reach through Squid (e.g. an LLM
+# server on the LAN), named <name>.lan.internal, in /etc/hosts format. Squid reads
+# it as hosts_file; after an edit run squid/reload_squid.sh. Besides .env, this is
+# the only place where IP addresses are written. Example:
+#   <ip-address>  llm.lan.internal

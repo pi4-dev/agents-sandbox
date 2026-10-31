@@ -1,0 +1,6 @@
+# build context: only the code, never the runtime data or secrets
+home/
+workspace/
+node_modules/
+*.env
+*.env.*

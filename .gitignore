@@ -1,0 +1,41 @@
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+**/*.env
+**/*.env.*
+!**/*.env.example
+!proxy.env
+
+# Private keys and certificates
+*.pem
+*.key
+*.p12
+*.pfx
+ssl/squid-ca.*
+
+# Runtime state / caches
+claude-main/data/
+claude-bridge/home/
+claude-bridge/workspace/
+hermes/data/
+hermes/workspace/
+open-webui/data/
+litellm/db/
+squid/logs/
+**/__pycache__/
+**/.pytest_cache/
+node_modules/
+*.log
+
+# IDE and OS noise
+.DS_Store
+.idea/
+.vscode/
+
+# Configuration you keep locally: copies created from the tracked *.example by gen-secrets.sh
+squid/conf/*
+!squid/conf/*.example
+hermes/config.yaml
+# your additions to as-dns (dns/Corefile imports them)
+dns/local.d/*.conf

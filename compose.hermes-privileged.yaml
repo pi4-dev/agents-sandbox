@@ -1,0 +1,11 @@
+# Opt-in: full-trust (LAB) mode for Hermes.
+#
+#   docker compose -f docker-compose.yaml -f compose.hermes-privileged.yaml up -d
+#   (or COMPOSE_FILE=docker-compose.yaml:compose.hermes-privileged.yaml in .env)
+#
+# WARNING: privileged = access to host devices and mounts, and the ability to change
+# the firewall in the shared as-hermes-net namespace. Any path to root in the
+# container means root on the host. Do not treat this mode as a sandbox.
+services:
+  as-hermes:
+    privileged: true
