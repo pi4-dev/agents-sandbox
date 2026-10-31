@@ -37,6 +37,11 @@ terminal:
 updates:
   check: false
 
+security:
+  # Pinned here, not in an env file: the gateway copies it into HERMES_REDACT_SECRETS
+  # at start, over /opt/data/.env, and this file is mounted read-only.
+  redact_secrets: true
+
 # LAB YOLO mode: do not prompt for dangerous shell commands.
 approvals:
   mode: false

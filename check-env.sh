@@ -64,13 +64,13 @@ allow=no
 [ $mode = examples ] && allow=yes
 for f in "${present[@]}"; do scan "$f" $allow; done
 # config files are not placeholders: an active CHANGE_ME line there would be live config
-for f in proxy.env hermes/config.yaml"$sfx" litellm/litellm-config.yaml litellm/models/*.yaml squid/conf/*.txt"$sfx"; do
+for f in proxy.env hermes/config.yaml"$sfx" hermes/managed.env"$sfx" litellm/litellm-config.yaml litellm/models/*.yaml squid/conf/*.txt"$sfx"; do
   [ -f "$f" ] && scan "$f" no
 done
 
 # --- local configuration: your copies of the config *.example files ---
 if [ $mode = local ]; then
-  for ex in squid/conf/*.example hermes/config.yaml.example; do
+  for ex in squid/conf/*.example hermes/config.yaml.example hermes/managed.env.example; do
     f=${ex%.example}
     if [ ! -f "$f" ]; then err "missing $f (./gen-secrets.sh creates it from $ex)"
     elif [ "$ex" -nt "$f" ] && ! cmp -s "$ex" "$f"; then
@@ -189,6 +189,11 @@ if [ $mode = local ]; then
       echo "check-env: warning: $bad is not owned by UID $puid (PUID in hermes/hermes.env), so Hermes cannot write it. Fix: sudo chown -R $puid:$pgid $d" >&2
     fi
   done
+  # Hermes reads the managed env as PUID inside the container and does not start when it cannot
+  f=hermes/managed.env
+  if [ -f "$f" ] && [ -z "$(find "$f" \( -uid "$puid" -perm -u=r \) -o \( -gid "$pgid" -perm -g=r \) -o -perm -o=r 2>/dev/null)" ]; then
+    echo "check-env: warning: $f is not readable by UID $puid (PUID in hermes/hermes.env), so Hermes cannot load it. Fix: chmod 644 $f" >&2
+  fi
 fi
 
 # --- dns/local.d: a forward to anything but Docker's DNS reopens DNS as a way out ---
@@ -201,7 +206,7 @@ done
 
 # --- addresses live only in .env and squid/conf/lan.hosts; everything else uses names ---
 ipv4='([0-9]{1,3}\.){3}[0-9]{1,3}'
-for f in "${present[@]}" proxy.env docker-compose.yaml compose.hermes-privileged.yaml hermes/config.yaml* \
+for f in "${present[@]}" proxy.env docker-compose.yaml compose.hermes-privileged.yaml hermes/config.yaml* hermes/managed.env* \
          litellm/litellm-config.yaml litellm/models/*.yaml dns/Corefile ingress/Caddyfile ingress/dashboard.html squid/conf/* \
          claude-main/policy/*; do
   [ -f "$f" ] || continue

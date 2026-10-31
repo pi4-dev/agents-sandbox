@@ -95,6 +95,15 @@ services:
       - ./hermes/data:/opt/data:rw
       - ./hermes/config.yaml:/opt/data/config.yaml:ro
       - ./hermes/workspace:/workspace:rw
+      # managed scope: loaded last, over /opt/data/.env (hermes/managed.env.example).
+      # A single file: /etc/hermes holds files of the image. Missing source: no start
+      # (Docker would create a directory, which Hermes cannot load).
+      - type: bind
+        source: ./hermes/managed.env
+        target: /etc/hermes/.env
+        read_only: true
+        bind:
+          create_host_path: false
 
     network_mode: service:as-hermes-net
 

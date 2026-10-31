@@ -1,6 +1,6 @@
 #!/bin/bash
 # Creates the real env files and the local configuration (squid/conf/*,
-# hermes/config.yaml) from the tracked *.example files when missing, and replaces every
+# hermes/config.yaml, hermes/managed.env) from the tracked *.example files when missing, and replaces every
 # generated CHANGE_ME_* placeholder with a random value. The same placeholder gets
 # the same value in every file (e.g. the PostgreSQL password in litellm-db.env and
 # DATABASE_URL). Existing values are never touched, so it is safe to run again.
@@ -20,7 +20,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 # local configuration: your copies; git pull only updates the *.example files
-for ex in squid/conf/*.example hermes/config.yaml.example; do
+for ex in squid/conf/*.example hermes/config.yaml.example hermes/managed.env.example; do
   f=${ex%.example}
   if [ ! -f "$f" ]; then
     cp "$ex" "$f"

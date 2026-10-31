@@ -29,6 +29,7 @@ docker compose -f docker-compose.yaml -f compose.hermes-privileged.yaml config -
 
 python3 - config.json privileged.json <<'EOF'
 import json
+import re
 import sys
 
 cfg = json.load(open(sys.argv[1]))
@@ -111,6 +112,33 @@ for k in ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"]:
 check(not svc["as-hermes"].get("privileged"), "as-hermes: not privileged by default")
 check(priv["services"]["as-hermes"].get("privileged") is True,
       "compose.hermes-privileged.yaml: opt-in privileged mode works")
+
+# --- Hermes settings the agent cannot change by editing /opt/data/.env ---
+hermes_mounts = {v["target"]: v for v in svc["as-hermes"].get("volumes", [])}
+check(hermes_mounts.get("/opt/data/config.yaml", {}).get("read_only") is True,
+      "as-hermes: config.yaml mounted read-only")
+managed = hermes_mounts.get("/etc/hermes/.env", {})
+check(managed.get("type") == "bind" and managed.get("source", "").endswith("/hermes/managed.env")
+      and managed.get("read_only") is True and (managed.get("bind") or {}).get("create_host_path") is False,
+      "as-hermes: hermes/managed.env read-only at /etc/hermes/.env, never created by Docker")
+check(not [t for t in hermes_mounts if t == "/etc/hermes" or t.startswith("/etc/hermes/") and t != "/etc/hermes/.env"],
+      "as-hermes: nothing else mounted in /etc/hermes (the image keeps files there)")
+check("HERMES_MANAGED_DIR" not in env["as-hermes"], "as-hermes: HERMES_MANAGED_DIR unset (managed scope in /etc/hermes)")
+pins = {}
+for line in open("hermes/managed.env.example"):
+    line = line.strip()
+    if line and not line.startswith("#"):
+        k, _, v = line.partition("=")
+        pins[k.strip()] = v.strip()
+rw = sorted(t for t, v in hermes_mounts.items() if v.get("type") == "bind" and not v.get("read_only"))
+check(sorted(pins.get("HERMES_WRITE_SAFE_ROOT", "").split(":")) == rw,
+      f"managed.env: HERMES_WRITE_SAFE_ROOT = the read-write mounts of as-hermes {rw}")
+for k, want in [("HERMES_ALLOW_PRIVATE_URLS", "false"), ("HERMES_ENABLE_PROJECT_PLUGINS", "false"),
+                ("HERMES_EPHEMERAL_SYSTEM_PROMPT", ""), ("HERMES_PREFILL_MESSAGES_FILE", "")]:
+    check(pins.get(k) == want, f"managed.env: {k}={want}")
+hermes_cfg = open("hermes/config.yaml.example").read()
+check(re.search(r"(?m)^security:\n(?:[ \t]*(?:#.*)?\n)*[ \t]+redact_secrets:[ \t]*true[ \t]*$", hermes_cfg) is not None,
+      "hermes/config.yaml: security.redact_secrets is true")
 for name, s in svc.items():
     mounts = [v.get("source", "") for v in s.get("volumes", [])]
     check(not any("docker.sock" in m for m in mounts), f"{name}: no Docker socket mount")
