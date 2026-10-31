@@ -92,6 +92,8 @@ In short:
    from `include:` and the key's line). Then run `./check-env.sh`.
    `CLAUDE_OAI_KEY`, the key between LiteLLM and the Claude bridge, is generated into
    `litellm/litellm.env` and `claude-bridge/claude-bridge.env` (the bridge's environment).
+   The Hermes dashboard password goes to `hermes/dashboard-password` and only its hash
+   into `hermes/hermes.env`; hashing needs `python3` on the host.
    The LiteLLM keys for Hermes and Open WebUI are generated here too, before LiteLLM
    exists; on start the one-shot `as-litellm-keys` registers exactly those values as
    LiteLLM virtual keys, and Hermes and Open WebUI wait for it. So the stack comes up
@@ -182,6 +184,10 @@ Edit `.env` only (`VLAN_*`, `PROXY_IP`, `INGRESS_IP`, `BLIND_*`, `DNS_IP`, `LLM_
   - `hermes/config.yaml` (read-only) for what the gateway takes from it, e.g. `security.redact_secrets: true`;
   - `hermes/managed.env`, mounted read-only as Hermes' managed scope (`/etc/hermes/.env`) and loaded last on every reload of its env: `HERMES_WRITE_SAFE_ROOT=/opt/data:/workspace` (`write_file`/`patch` only in the read-write mounts; the image default is `/opt/data` alone), `HERMES_ALLOW_PRIVATE_URLS=false`, `HERMES_ENABLE_PROJECT_PLUGINS=false`, an empty `HERMES_EPHEMERAL_SYSTEM_PROMPT` and `HERMES_PREFILL_MESSAGES_FILE` (no prompt text from `.env`), `HERMES_HOME=/opt/data` (where the read-only `config.yaml` and `SOUL.md` are; Hermes profiles do not work with it) and `HERMES_IGNORE_RULES=false` (`SOUL.md`, memory and skills stay in the prompt). No secrets in it: Hermes, and therefore the agent, reads it.
   - After an edit: `docker compose up -d --force-recreate as-hermes`. `docker exec as-hermes hermes doctor` then reports `Managed scope active: … env key(s) pinned by /etc/hermes`; a line `managed dir set via HERMES_MANAGED_DIR` means the scope was redirected (see [Security model](#security-model)).
+- **Hermes dashboard login:** user `HERMES_DASHBOARD_BASIC_AUTH_USERNAME` from `hermes/hermes.env`, password in `hermes/dashboard-password` (host only; no container mounts it). The container gets only the password's scrypt hash and no static session secret, so you log in again after each restart of `as-hermes`.
+  - New password: set `HERMES_DASHBOARD_BASIC_AUTH_PASSWORD_HASH=CHANGE_ME_HERMES_DASHBOARD_PASSWORD_HASH` in `hermes/hermes.env`, run `./gen-secrets.sh`, then `docker compose up -d --force-recreate as-hermes`.
+  - The hash stays in single quotes: Compose expands the `$` in it otherwise. `check-env.sh` checks the quoting and the format.
+  - An older `hermes.env` with `HERMES_DASHBOARD_BASIC_AUTH_PASSWORD` and `HERMES_DASHBOARD_BASIC_AUTH_SECRET`: replace both lines with the placeholder line above and run `./gen-secrets.sh`. `check-env.sh` warns until then, and fails while the plaintext password and the hash are both set (the plaintext wins).
 - **Hermes persona:** `hermes/SOUL.md`, mounted read-only at `/opt/data/SOUL.md`, so neither the agent nor the dashboard can rewrite it. Edit it on the host, then `docker compose up -d --force-recreate as-hermes`: an editor that replaces the file leaves the container on the old copy.
   - Keep text of your own in it beyond the image's default persona (the example's "This environment" section). Hermes rewrites an unedited default or an old template in place; on a read-only file that stops it from starting.
   - The persona used before stays in `hermes/data/SOUL.md`, hidden by the mount; `gen-secrets.sh` points at it when it creates `hermes/SOUL.md`.
@@ -274,6 +280,13 @@ Known limitations:
   and `hermes/workspace`; in the container, scratch space such as `/tmp` (the image's
   code is not writable for it). Whatever Hermes must not write belongs to root or is
   mounted `:ro`, never to its UID.
+- **The agent can use its own dashboard.** The dashboard runs with Hermes' UID, so the
+  agent reads what it holds: its environment (`/proc/PID/environ`) and, where the host's
+  `kernel.yama.ptrace_scope` is 0, its memory. Hence the password hash and the per-start
+  session key instead of a plaintext password and a fixed secret in `hermes.env`. The
+  agent reaches the dashboard on `localhost:9119` anyway and can replace its login with
+  a line in `/opt/data/.env`: it is the agent's own control plane, with no more rights
+  than the agent.
 - **`as-netshoot` reaches everything** in `as-net-blind`, and the sidecars admit it.
   Whoever can `docker exec` already controls every container; the bridge still
   requires `CLAUDE_OAI_KEY`. Nothing can connect to netshoot.

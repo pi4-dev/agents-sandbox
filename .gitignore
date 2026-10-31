@@ -6,6 +6,8 @@
 **/*.env.*
 !**/*.env.example
 !proxy.env
+# Hermes dashboard password (gen-secrets.sh; hermes.env gets only its hash)
+hermes/dashboard-password
 
 # Private keys and certificates
 *.pem

@@ -8,6 +8,8 @@ fail=0
 while IFS= read -r -d '' f; do
   case $f in
     *.env.example|proxy.env) ;;
+    hermes/dashboard-password)
+      echo "tracked secret: $f"; fail=1 ;;
     *.env|*.env.*)
       echo "tracked env file: $f"; fail=1 ;;
     *.key|*.pem|*.p12|*.pfx|ssl/squid-ca.*)

@@ -128,6 +128,13 @@ check(soul.get("type") == "bind" and soul.get("source", "").endswith("/hermes/SO
 soul_parts = [p for p in open("hermes/SOUL.md.example").read().split("\n\n") if p.strip()]
 check(len(soul_parts) > 1,
       "hermes/SOUL.md.example: more than the image's default persona (an unedited default is rewritten, which fails read-only)")
+he = env["as-hermes"]
+check("HERMES_DASHBOARD_BASIC_AUTH_PASSWORD_HASH" in he and "HERMES_DASHBOARD_BASIC_AUTH_PASSWORD" not in he
+      and "HERMES_DASHBOARD_BASIC_AUTH_SECRET" not in he,
+      "as-hermes: dashboard login as a password hash; no plaintext password or session secret in its env")
+sources = [v.get("source", "") for s in svc.values() for v in s.get("volumes", [])]
+check(not [x for x in sources if x.endswith("/hermes") or x.endswith("/hermes/dashboard-password")],
+      "no container mounts hermes/dashboard-password (or all of hermes/)")
 check(not [t for t in hermes_mounts if t == "/etc/hermes" or t.startswith("/etc/hermes/") and t != "/etc/hermes/.env"],
       "as-hermes: nothing else mounted in /etc/hermes (the image keeps files there)")
 check("HERMES_MANAGED_DIR" not in env["as-hermes"], "as-hermes: HERMES_MANAGED_DIR unset (managed scope in /etc/hermes)")

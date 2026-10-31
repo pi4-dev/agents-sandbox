@@ -117,6 +117,34 @@ if [ -f "$db" ] && [ -f "$ll" ]; then
   fi
 fi
 
+# --- Hermes dashboard login: every process with Hermes' UID, the agent included, reads the
+#     container env, so hermes.env holds a password hash and no session secret ---
+he=hermes/hermes.env$sfx
+if [ -f "$he" ]; then
+  has() { grep -qE "^[[:space:]]*$1[[:space:]]*=" "$he"; }
+  if has HERMES_DASHBOARD_BASIC_AUTH_PASSWORD && has HERMES_DASHBOARD_BASIC_AUTH_PASSWORD_HASH; then
+    err "$he: HERMES_DASHBOARD_BASIC_AUTH_PASSWORD wins over HERMES_DASHBOARD_BASIC_AUTH_PASSWORD_HASH; delete it"
+  elif has HERMES_DASHBOARD_BASIC_AUTH_PASSWORD; then
+    echo "check-env: warning: $he: plaintext HERMES_DASHBOARD_BASIC_AUTH_PASSWORD, readable by the agent in the container env. Replace the line with HERMES_DASHBOARD_BASIC_AUTH_PASSWORD_HASH=CHANGE_ME_HERMES_DASHBOARD_PASSWORD_HASH and run ./gen-secrets.sh" >&2
+  fi
+  if has HERMES_DASHBOARD_BASIC_AUTH_SECRET; then
+    echo "check-env: warning: $he: HERMES_DASHBOARD_BASIC_AUTH_SECRET is readable by the agent in the container env and signs dashboard sessions; delete the line (you log in again after each restart)" >&2
+  fi
+  raw=$(sed -nE 's/^[[:space:]]*HERMES_DASHBOARD_BASIC_AUTH_PASSWORD_HASH[[:space:]]*=[[:space:]]*//p' "$he" | tail -n1 |
+        sed -E 's/[[:space:]]+#.*$//; s/[[:space:]]+$//')
+  if [ -n "$raw" ] && [[ $raw != *CHANGE_ME* ]]; then
+    h=
+    if [[ $raw == \'*\' ]]; then h=${raw:1:${#raw}-2}
+    elif [[ $raw == *'$$'* ]]; then h=${raw//\$\$/\$}
+    else err "$he: put HERMES_DASHBOARD_BASIC_AUTH_PASSWORD_HASH in single quotes; Compose expands the \$ in it otherwise"
+    fi
+    re='^scrypt\$[0-9]+\$[0-9]+\$[0-9]+\$[A-Za-z0-9+/]+=*\$[A-Za-z0-9+/]+=*$'
+    if [ -n "$h" ] && ! [[ $h =~ $re ]]; then
+      err "$he: HERMES_DASHBOARD_BASIC_AUTH_PASSWORD_HASH is not a scrypt\$N\$r\$p\$salt\$hash value (./gen-secrets.sh makes one)"
+    fi
+  fi
+fi
+
 # --- LiteLLM model sets: litellm/models/*.yaml pulled in by include: ---
 cfg=litellm/litellm-config.yaml
 names=() vars=()
