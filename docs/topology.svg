@@ -1,5 +1,5 @@
 <!-- agents-sandbox topology. Source of truth: docker-compose.yaml; keep in sync with docs/NETWORK.md. -->
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 900" aria-label="Topology: router/firewall, as-net-vlan with as-ingress and as-squid, as-net-blind with agents behind firewall sidecars, LiteLLM, Open WebUI and as-dns, as-net-litellm-egress between LiteLLM and Squid, as-net-litellm-db with the database">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 900" aria-label="Topology: router/firewall, as-net-vlan with as-ingress and as-squid, as-net-blind with agents behind firewall sidecars, LiteLLM, the agents' gateway as-llm-gw, Open WebUI and as-dns, as-net-litellm-egress between LiteLLM and Squid, as-net-litellm-db with the database">
         <title>agents-sandbox topology</title>
         <style>
 svg {
@@ -178,11 +178,15 @@ text { font-family: var(--f-body); fill: var(--fg); }
         <text class="t-mono" x="714" y="700">legs: blind · litellm-egress · litellm-db</text>
         <circle class="dot-llm" cx="1030" cy="665" r="5"/>
 
-        <!-- clients -> LiteLLM :4000 -->
-        <path class="e-proxy" d="M115 560 L115 590 L640 590 L640 665 L698 665" marker-end="url(#a-proxy)"/>
-        <line class="e-proxy" x1="285" y1="560" x2="285" y2="590"/>
-        <circle class="dot-proxy" cx="285" cy="590" r="4"/>
-        <text class="t-edge c-proxy" x="520" y="583">:4000</text>
+        <!-- Open WebUI -> LiteLLM :4000, directly -->
+        <path class="e-proxy" d="M115 560 L115 606 L640 606 L640 665 L698 665" marker-end="url(#a-proxy)"/>
+        <text class="t-edge c-proxy" x="606" y="600">:4000</text>
+        <!-- Hermes -> as-llm-gw (client routes, no upstream headers) -> LiteLLM :4000 -->
+        <path class="e-proxy" d="M285 560 L285 580 L398 580" marker-end="url(#a-proxy)"/>
+        <rect class="gw" x="400" y="567" width="200" height="26" rx="6"/>
+        <text class="t-mono" x="500" y="584" text-anchor="middle" style="fill:var(--fg)">as-llm-gw · llm.as.internal</text>
+        <path class="e-proxy" d="M600 580 L760 580 L760 618" marker-end="url(#a-proxy)"/>
+        <text class="t-edge c-proxy" x="768" y="604">:4000</text>
         <!-- LiteLLM -> bridge -->
         <line class="e-proxy" x1="870" y1="620" x2="870" y2="562" marker-end="url(#a-proxy)"/>
         <text class="t-edge c-proxy" x="879" y="600">:9090</text>

@@ -17,6 +17,7 @@ Docker Compose homelab for AI coding agents with a shared LiteLLM API, an HTTPS-
 | `as-dns` | Internal DNS (CoreDNS): only `*.as.internal`, no recursion, every query logged |
 | `as-litellm` | Shared API routing to LLM models |
 | `as-litellm-keys` | One-shot job: registers the pre-generated client keys in LiteLLM |
+| `as-llm-gw` | The agents' way to LiteLLM (Caddy, `llm.as.internal:4000`): only the client-key routes, without the response headers that describe the upstream |
 | `as-litellm-db` | PostgreSQL on a Docker `internal` network |
 | `as-open-webui` | Web UI for models |
 
@@ -37,6 +38,7 @@ claude-bridge/                 Claude bridge: server.mjs, its image and environm
 hermes/                        Hermes configuration (config.yaml.example), managed settings (managed.env.example), persona (SOUL.md.example), environment example
 fw/                            Network namespace firewall rules (fw.sh)
 litellm/                       LiteLLM model/database configuration
+llm-gw/                        as-llm-gw config (Caddyfile): the agents' routes to LiteLLM
 open-webui/                    Web UI environment example
 squid/                         Proxy image, entrypoint, error pages
 squid/conf/                    squid.conf, the allow/deny lists and LAN hosts: tracked as *.example, your copies beside them
@@ -56,24 +58,28 @@ In short:
  LAN ──► as-ingress :80 :8080 :4000 :9119 ───────┐          ┌── as-squid ──► internet (allowlist)
          (VLAN leg, INGRESS_IP)                  │          │   (VLAN leg, PROXY_IP)
                                                  ▼          │
-   as-net-blind (internal, no route out):  open-webui  litellm  hermes  claude  claude-bridge  netshoot  as-dns
-                                                    │
+   as-net-blind (internal, no route out):  open-webui  litellm  llm-gw  hermes  claude  claude-bridge  netshoot  as-dns
+                                                    │       (hermes ──► llm-gw ──► litellm)
                                    as-net-litellm-egress (internal): LiteLLM <-> Squid only
 ```
 
 - **`as-net-blind` is a Docker `internal` network: nothing on it has a route out.** Agents, LiteLLM, Open WebUI and `as-dns` live there. The way out is Squid, the way in `as-ingress`; both have a second leg on the VLAN (`macvlan`, parent `VLAN_PARENT`) and do not route between their legs (`ip_forward=0`, CI-tested with an agent that sets its own route). Changing an address or a route inside `as-net-blind` leads nowhere, even with `NET_ADMIN` (privileged Hermes).
 - Agent processes share the network namespace of their `as-*-net` sidecars. The sidecar applies default-drop IPv4/IPv6 rules (`fw/fw.sh`) between the containers of `as-net-blind`. Only the sidecar has `NET_ADMIN`.
 - The egress for agents is Squid at `proxy.as.internal:3128` (fixed port). Squid bumps all TLS and decides on the decrypted request (host, URL, method). Denied requests get `403 Blocked by agents-sandbox proxy policy`.
+- **Hermes reaches LiteLLM only through `as-llm-gw`** (`llm.as.internal:4000`, `llm-gw/Caddyfile`); its firewall drops `litellm.as.internal`.
+  - The gateway forwards only the routes of the client keys (the default `LITELLM_CLIENT_ROUTES`; CI keeps both lists equal). Everything else is a 404 that never reaches LiteLLM: `/openapi.json`, `/redoc`, `/health/*`, `/metrics`, `/.well-known/*`, key and admin routes.
+  - It drops the response headers that describe the upstream: `llm_provider-*`, under which LiteLLM forwards every header of the provider (no LiteLLM setting turns that off), and `x-litellm-model-*` (`api_base`, the deployment's real model name and id).
+  - Error bodies pass unchanged. Admins (`as-ingress :4000`) and Open WebUI use LiteLLM directly.
 - **LiteLLM reaches Squid over its own network** (`as-net-litellm-egress`, `llm-proxy.as.internal`). Squid serves the LLM provider APIs (`llm_api_domains.txt`) and LAN hosts (`lan.hosts`) only on that leg, so the identity is network membership, not an address an agent could forge.
 - **Dashboard** at `http://<INGRESS_IP>/` (`:80`, only from `INGRESS_DASHBOARD_ALLOW_FROM`): links to every published GUI, with a dot showing whether your browser reaches its port. Caddy builds the list on each request from the `# @dashboard <name> | <description> | <path>` lines in `ingress/Caddyfile`, so a new site with such a line shows up after `docker compose restart as-ingress`. Every path serves the dashboard; the Caddyfile itself is not served.
 - **GUIs through `as-ingress`** on `INGRESS_IP`, one port per GUI: Open WebUI `:8080`, LiteLLM `:4000` (API and `/ui`), Hermes dashboard `:9119` (only from `HERMES_DASHBOARD_ALLOW_FROM`). Caddy listens on its VLAN leg only.
-- **Names, not addresses.** Every service is reached by a `*.as.internal` name (`proxy`, `litellm`, `claude-bridge`, `hermes`, `open-webui`, `netshoot`, `dns`, `ingress`, `dev-ws01`). They are Docker network aliases in `docker-compose.yaml`, and Docker assigns the addresses (`BLIND_IP_RANGE`). Fixed addresses are only the VLAN legs (`PROXY_IP`, `INGRESS_IP`) and `DNS_IP`, all in `.env`; LAN hosts are in `squid/conf/lan.hosts`. `check-env.sh` rejects literal IPs anywhere else.
+- **Names, not addresses.** Every service is reached by a `*.as.internal` name (`proxy`, `litellm`, `llm`, `claude-bridge`, `hermes`, `open-webui`, `netshoot`, `dns`, `ingress`, `dev-ws01`). They are Docker network aliases in `docker-compose.yaml`, and Docker assigns the addresses (`BLIND_IP_RANGE`). Fixed addresses are only the VLAN legs (`PROXY_IP`, `INGRESS_IP`) and `DNS_IP`, all in `.env`; LAN hosts are in `squid/conf/lan.hosts`. `check-env.sh` rejects literal IPs anywhere else.
 - **`as-dns`** (CoreDNS) asks Docker's embedded DNS for `*.as.internal` and keeps one log of every DNS query in `as-net-blind` (`docker compose logs as-dns`).
   - Any other name gets NXDOMAIN on the spot. Nothing is forwarded out: `as-dns` sits only on the internal network, where Docker forwards no query to an outside resolver (CI-tested), so DNS cannot carry data out (subdomain tunneling).
   - Internet names are resolved by Squid itself, over its VLAN leg (`SQUID_DNS_UPSTREAM`), and only for requests that passed its ACLs.
   - Agents: `fw.sh` writes the sidecar's `/etc/resolv.conf` (`nameserver DNS_IP`, `search as.internal`), which the agent container shares. It allows DNS only to `as-dns` and blocks Docker's embedded DNS (`127.0.0.11`), so every lookup is logged.
-  - LiteLLM, Open WebUI and `as-ingress` (no sidecar) use `dns: DNS_IP`: Docker's embedded DNS answers the aliases of their networks itself and sends the rest to `as-dns`.
-  - Firewall rules take names (`ALLOW_OUT=tcp:litellm.as.internal:4000`). `fw.sh` re-resolves them every 30 s (`FW_REFRESH`) and rebuilds the rules when a peer starts, stops or comes back on another address; a name that does not resolve gets no rule.
+  - LiteLLM, Open WebUI, `as-ingress` and `as-llm-gw` (no sidecar) use `dns: DNS_IP`: Docker's embedded DNS answers the aliases of their networks itself and sends the rest to `as-dns`.
+  - Firewall rules take names (`ALLOW_OUT=tcp:llm.as.internal:4000`). `fw.sh` re-resolves them every 30 s (`FW_REFRESH`) and rebuilds the rules when a peer starts, stops or comes back on another address; a name that does not resolve gets no rule.
 - Restrict the VLAN legs on the edge router/firewall: [docs/NETWORK.md](docs/NETWORK.md) has the flow matrix, anti-spoofing, example configurations and verification steps.
 - The default `192.19.255.0/24` subnet is not RFC1918 space (see "Changing addressing").
 - Hermes runs **without** `privileged`. Full-trust mode is opt-in:
@@ -146,13 +152,17 @@ Edit `.env` only (`VLAN_*`, `PROXY_IP`, `INGRESS_IP`, `BLIND_*`, `DNS_IP`, `LLM_
 - Each client has its own virtual key, alias `hermes` and `open-webui`. They are
   not restricted to models or budgets.
 - **The keys reach the LLM API only.** Their Allowed Routes are chat and text
-  completions, embeddings and the model list (`/v1/models`).
+  completions and the model list (`/v1/models`); no embeddings, which no model in
+  `litellm/models` serves.
   - `/model/info`, `/model_group/info`, which show the upstream (`api_base`,
     settings), and all key and admin routes are refused (401/403).
   - `as-litellm-keys` sets the routes on new keys and on registered keys that have
-    none (full access, e.g. after an edit in the UI); a rotated key keeps them.
+    none (full access, e.g. after an edit in the UI) or still have an earlier default
+    list (with embeddings); a rotated key keeps them. A list you set in the UI stays.
   - Other routes: `LITELLM_CLIENT_ROUTES` (space-separated) in the environment of
-    `as-litellm-keys`.
+    `as-litellm-keys`. Hermes gets only what the `@client_routes` line of
+    `llm-gw/Caddyfile` lists; `validate.sh` checks that line against the default list
+    in `litellm/litellm-keys.py`, so change both together.
   - The UI may still show the key type "Default". The list under Allowed Routes
     is what applies. LiteLLM's "AI APIs" type would also allow `/model/info`.
 - **To restrict a client,** open the LiteLLM UI from the LAN at `http://<INGRESS_IP>:4000/ui`

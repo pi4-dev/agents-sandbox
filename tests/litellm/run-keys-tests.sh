@@ -1,7 +1,8 @@
 #!/bin/bash
 # as-litellm-keys (litellm/litellm-keys.py) against a real LiteLLM + PostgreSQL:
-# pre-generated client keys get registered with LLM API routes only (no /model/info),
-# a registered full-access key gets restricted, a second run changes nothing, a changed
+# pre-generated client keys get registered with LLM API routes only (no /model/info,
+# no embeddings), a registered full-access key gets restricted, a key still on an earlier
+# default route list gets the current one, a second run changes nothing, a changed
 # value rotates the key and keeps the settings made in the LiteLLM UI, invalid
 # values stop the job, and client key values never travel in a URI (the job
 # talks to LiteLLM through tests/litellm/uri-logger.py, an access-logging proxy).
@@ -91,6 +92,7 @@ upstream_info() { # upstream_info <key>: "denied" when every info route is refus
   echo "$out"
 }
 CHAT='{"model":"alpha","messages":[{"role":"user","content":"hi"}]}'
+EMB='{"model":"alpha","input":"hi"}'
 
 HK=sk-$(openssl rand -hex 24) OK=sk-$(openssl rand -hex 24)
 # the Hermes key registered with full access (no routes)
@@ -107,6 +109,7 @@ for who in HK OK; do
   expect "$who: upstream info routes refused" "$(upstream_info "$k")" denied
   expect "$who: chat completions allowed" "$(denied "$(code "$k" /v1/chat/completions "$CHAT")" | cut -c1-7)" allowed
   expect "$who: key management refused" "$(denied "$(code "$k" /key/list)")" denied
+  expect "$who: embeddings refused" "$(denied "$(code "$k" /v1/embeddings "$EMB")")" denied
 done
 expect "master key still reads /model/info" "$(code "$MASTER" /model/info)" 200
 routes=$(curl -s -H "Authorization: Bearer $MASTER" "http://127.0.0.1:$PORT/key/list?key_alias=hermes&return_full_object=true" |
@@ -114,6 +117,22 @@ routes=$(curl -s -H "Authorization: Bearer $MASTER" "http://127.0.0.1:$PORT/key/
 echo "info: hermes key_type/allowed_routes: $routes"
 out=$(job "$HK" "$OK")
 expect "second run changes nothing" "$(grep -c 'already registered$' <<<"$out")" 2
+
+# keys from an earlier version: the Hermes key still on the old default (with embeddings)
+# gets the current routes; a list set by hand (the Open WebUI key here) stays
+key_routes() { # key_routes <key> <json list>: what an admin would set in the UI
+  curl -s -o /dev/null -H "Authorization: Bearer $MASTER" -H 'Content-Type: application/json' \
+    "http://127.0.0.1:$PORT/key/update" -d "{\"key\":\"$1\",\"allowed_routes\":$2}"
+}
+key_routes "$HK" '["/v1/chat/completions","/chat/completions","/v1/completions","/completions","/v1/embeddings","/embeddings","/v1/models","/models"]'
+key_routes "$OK" '["/v1/chat/completions","/v1/embeddings","/v1/models"]'
+expect "control: the old default allows embeddings" "$(denied "$(code "$HK" /v1/embeddings "$EMB")" | cut -c1-7)" allowed
+out=$(job "$HK" "$OK")
+expect "a key on the old default routes is updated" "$(grep -c 'hermes: already registered, routes updated' <<<"$out")" 1
+expect "the updated key: embeddings refused" "$(denied "$(code "$HK" /v1/embeddings "$EMB")")" denied
+expect "the updated key: chat completions allowed" "$(denied "$(code "$HK" /v1/chat/completions "$CHAT")" | cut -c1-7)" allowed
+expect "a route list set by hand stays" "$(grep -c 'open-webui: already registered$' <<<"$out")" 1
+expect "control: the hand-set list still allows embeddings" "$(denied "$(code "$OK" /v1/embeddings "$EMB")" | cut -c1-7)" allowed
 
 # what an admin would do in the LiteLLM UI: restrict the Hermes key to one model
 curl -s -o /dev/null -H "Authorization: Bearer $MASTER" -H 'Content-Type: application/json' \

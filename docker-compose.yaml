@@ -61,8 +61,9 @@ services:
       ALLOW_IN: >-
         tcp:9119:ingress.as.internal
         any::netshoot.as.internal
+      # LiteLLM only through as-llm-gw (client routes, no upstream headers)
       ALLOW_OUT: >-
-        tcp:litellm.as.internal:4000
+        tcp:llm.as.internal:4000
     volumes:
       - ./fw/fw.sh:/fw.sh:ro
     networks:
@@ -90,6 +91,7 @@ services:
       as-litellm: { condition: service_healthy }
       as-litellm-keys: { condition: service_completed_successfully }
       as-hermes-net: { condition: service_healthy }
+      as-llm-gw: { condition: service_started }
 
     volumes:
       - ./hermes/data:/opt/data:rw
@@ -211,6 +213,29 @@ services:
     depends_on:
       as-litellm: { condition: service_healthy }
     restart: "no"
+
+# - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+  # The agents' way to LiteLLM (llm.as.internal:4000): only the client-key routes,
+  # without the response headers that describe the upstream (llm-gw/Caddyfile).
+  as-llm-gw:
+    image: ${CADDY_IMAGE:-caddy:2.8.4-alpine}
+    container_name: as-llm-gw
+    restart: unless-stopped
+    volumes:
+      - ./llm-gw:/etc/caddy:ro       # Caddyfile (a directory: edits are seen)
+    tmpfs: [/data, /config]
+    dns: ["${DNS_IP}"]
+    depends_on:
+      as-dns: { condition: service_started }
+    networks:
+      as-net-blind:
+        aliases: [llm.as.internal]
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]      # the image's caddy binary carries this file capability
+    security_opt: ["no-new-privileges:true"]
+    logging: *bounded-logs
 
 # - - - - - - - - - - - - - - - - - - - - - - - - - - -
 

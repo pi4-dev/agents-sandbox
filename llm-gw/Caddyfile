@@ -1,0 +1,31 @@
+# as-llm-gw: the agents' way to LiteLLM (llm.as.internal:4000). Hermes' firewall lets it
+# reach this, not litellm.as.internal. Admins (as-ingress :4000) and Open WebUI use
+# LiteLLM directly.
+#
+# - Forwards only the routes of the client keys (the default LITELLM_CLIENT_ROUTES in
+#   litellm/litellm-keys.py; tests/compose/validate.sh keeps both lists equal). Everything
+#   else (/openapi.json, /redoc, /health/*, /metrics, /.well-known/*, key and admin
+#   routes) is a 404 here and never reaches LiteLLM.
+# - Drops the response headers that describe the upstream: llm_provider-* (LiteLLM
+#   forwards every provider header under that prefix and has no setting to stop it) and
+#   x-litellm-model-* (api_base, the deployment's real model name and id).
+# - Error bodies pass unchanged.
+#
+# Access log: docker compose logs as-llm-gw. Edits apply on docker compose restart as-llm-gw.
+{
+	admin off
+	auto_https off
+	persist_config off
+}
+
+:4000 {
+	log
+	@client_routes path /v1/chat/completions /chat/completions /v1/completions /completions /v1/models /models
+	handle @client_routes {
+		reverse_proxy litellm.as.internal:4000 {
+			header_down -llm_provider-*
+			header_down -x-litellm-model-*
+		}
+	}
+	respond 404
+}

@@ -84,7 +84,7 @@ for name, s in svc.items():
 want_aliases = {
     "as-dns": "dns", "as-squid": "proxy", "as-litellm": "litellm", "as-open-webui": "open-webui",
     "as-hermes-net": "hermes", "as-netshoot-net": "netshoot", "as-ingress": "ingress",
-    "as-claude-net": "claude dev-ws01", "as-claude-bridge-net": "claude-bridge",
+    "as-claude-net": "claude dev-ws01", "as-claude-bridge-net": "claude-bridge", "as-llm-gw": "llm",
 }
 for name, want in want_aliases.items():
     for a in want.split():
@@ -205,10 +205,35 @@ check(squid_mounts.get("/etc/squid/conf", {}).get("read_only") is True,
 check(all(not t.startswith("/etc/squid/conf/") for t in squid_mounts),
       "as-squid: no single-file mounts inside /etc/squid/conf")
 
-for name in ["as-litellm", "as-open-webui", "as-ingress"]:
+for name in ["as-litellm", "as-open-webui", "as-ingress", "as-llm-gw"]:
     check(svc[name].get("dns") == [dns_ip], f"{name}: unknown names go to as-dns")
 check("dns" not in svc["as-squid"] and env["as-squid"].get("SQUID_DNS_UPSTREAM"),
       "as-squid: resolves internet names itself (SQUID_DNS_UPSTREAM)")
+# --- as-llm-gw: the agents' way to LiteLLM ---
+check(env["as-hermes-net"].get("ALLOW_OUT") == "tcp:llm.as.internal:4000",
+      "as-hermes-net: out only to as-llm-gw, not to LiteLLM directly")
+check(svc["as-hermes"].get("depends_on", {}).get("as-llm-gw") is not None, "as-hermes: starts after as-llm-gw")
+check(re.search(r'(?m)^\s*api:\s*"?http://llm\.as\.internal:4000/v1"?\s*$', open("hermes/config.yaml.example").read()),
+      "hermes/config.yaml: LiteLLM through as-llm-gw")
+gw = svc["as-llm-gw"]
+check(gw.get("read_only") is True and gw.get("cap_drop") == ["ALL"] and gw.get("cap_add") == ["NET_BIND_SERVICE"],
+      "as-llm-gw: read-only, no capabilities but NET_BIND_SERVICE")
+check(list(gw.get("networks", {})) == ["as-net-blind"], "as-llm-gw: only on as-net-blind")
+gw_mounts = {v["target"]: v for v in gw.get("volumes", [])}
+check(gw_mounts.get("/etc/caddy", {}).get("read_only") is True and gw_mounts["/etc/caddy"]["source"].endswith("/llm-gw"),
+      "as-llm-gw: llm-gw/ mounted read-only at /etc/caddy")
+gw_cfg = open("llm-gw/Caddyfile").read()
+gw_paths = re.search(r"(?m)^\s*@client_routes path (.+)$", gw_cfg)
+keys_src = open("litellm/litellm-keys.py").read()
+keys_default = re.search(r'ROUTES = os\.environ\.get\("LITELLM_CLIENT_ROUTES", " "\.join\(\((.*?)\)\)\)\.split\(\)', keys_src, re.S)
+key_routes = sorted(re.findall(r'"(/[^"]*)"', keys_default.group(1))) if keys_default else []
+check(key_routes and gw_paths and sorted(gw_paths.group(1).split()) == key_routes,
+      f"as-llm-gw: forwards exactly the default client-key routes {key_routes}")
+check(not [r for r in key_routes if "embeddings" in r], "client keys: no embeddings route by default")
+check(re.search(r"(?m)^\s*reverse_proxy litellm\.as\.internal:4000 \{", gw_cfg) and re.search(r"(?m)^\s*respond 404\s*$", gw_cfg),
+      "as-llm-gw: those routes to LiteLLM, everything else a 404")
+check(re.search(r"(?m)^\s*header_down -llm_provider-\*\s*$", gw_cfg) and re.search(r"(?m)^\s*header_down -x-litellm-model-\*\s*$", gw_cfg),
+      "as-llm-gw: drops the llm_provider-* and x-litellm-model-* response headers")
 check(env["as-hermes-net"].get("ALLOW_IN") == "tcp:9119:ingress.as.internal any::netshoot.as.internal",
       "as-hermes-net: dashboard reachable only from as-ingress")
 ing = svc["as-ingress"]

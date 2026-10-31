@@ -9,15 +9,18 @@ accept exactly those values, so the stack starts in one `docker compose up`.
   LITELLM_MASTER_KEY   admin key
   LITELLM_CLIENT_KEYS  "alias=ENV_VAR ...", e.g. "hermes=LITELLM_API_KEY"
   LITELLM_CLIENT_ROUTES  routes the client keys may call, space-separated (default: chat
-                       and text completions, embeddings, the model list). Explicit
-                       paths, because LiteLLM's "llm_api_routes" group (the UI's "AI
-                       APIs") also contains /model/info and /model_group/info, which
-                       show the upstream (api_base, settings).
+                       and text completions, the model list; no embeddings, which no
+                       model in litellm/models serves). Explicit paths, because
+                       LiteLLM's "llm_api_routes" group (the UI's "AI APIs") also
+                       contains /model/info and /model_group/info, which show the
+                       upstream (api_base, settings). The default is also the path list
+                       of as-llm-gw (llm-gw/Caddyfile), the agents' way to LiteLLM.
 
 Per alias:
   - key already registered      -> nothing to do (settings made in the UI stay), except
                                    a key with full access (no allowed_routes, e.g. after an
-                                   edit in the UI) gets LITELLM_CLIENT_ROUTES
+                                   edit in the UI) or with an earlier default route list
+                                   (PREVIOUS_DEFAULTS) gets LITELLM_CLIENT_ROUTES
   - alias exists with another   -> rotation: a new key with the old key's settings
     key (value changed in env)     (models, budgets, limits, metadata) replaces it
   - alias unknown               -> create the key
@@ -39,7 +42,13 @@ BASE = os.environ.get("LITELLM_URL", "http://as-litellm:4000").rstrip("/")
 MASTER = os.environ.get("LITELLM_MASTER_KEY", "")
 ROUTES = os.environ.get("LITELLM_CLIENT_ROUTES", " ".join((
     "/v1/chat/completions", "/chat/completions", "/v1/completions", "/completions",
-    "/v1/embeddings", "/embeddings", "/v1/models", "/models"))).split()
+    "/v1/models", "/models"))).split()
+# default route lists of earlier versions: a key that still has one exactly was never
+# changed by hand, so it moves to ROUTES (a list set in the UI stays)
+PREVIOUS_DEFAULTS = [
+    {"/v1/chat/completions", "/chat/completions", "/v1/completions", "/completions",
+     "/v1/embeddings", "/embeddings", "/v1/models", "/models"},
+]
 # settings carried over to the new key on rotation (what the LiteLLM UI lets you set)
 CARRY = ("models", "max_budget", "budget_duration", "tpm_limit", "rpm_limit",
          "max_parallel_requests", "metadata", "team_id", "user_id", "aliases",
@@ -83,14 +92,16 @@ def ensure(alias, key):
     old = keys_with_alias(alias)
     current = next((k for k in old if k.get("token") == token), None)
     if current is not None:
-        if current.get("allowed_routes"):
+        routes = set(current.get("allowed_routes") or [])
+        if routes and (routes == set(ROUTES) or routes not in PREVIOUS_DEFAULTS):
             print(f"litellm-keys: {alias}: already registered")
             return
-        # full access (no routes, e.g. cleared in the UI)
+        # full access (no routes, e.g. cleared in the UI) or an earlier default list
         status, _ = api("POST", "/key/update", {"key": token, "allowed_routes": ROUTES})
         if status != 200:
             sys.exit(f"litellm-keys: restricting '{alias}' to {ROUTES} failed (HTTP {status})")
-        print(f"litellm-keys: {alias}: already registered, restricted to {' '.join(ROUTES)}")
+        what = "restricted" if not routes else "routes updated"
+        print(f"litellm-keys: {alias}: already registered, {what} to {' '.join(ROUTES)}")
         return
     if not old:
         generate(key, alias, {})
@@ -98,6 +109,8 @@ def ensure(alias, key):
         return
     # rotation: new key under a temporary alias, delete the old one, take over the alias
     settings = {k: old[0].get(k) for k in CARRY}
+    if set(settings.get("allowed_routes") or []) in PREVIOUS_DEFAULTS:
+        settings["allowed_routes"] = ROUTES
     tmp = f"{alias}.rotating"
     api("POST", "/key/delete", {"key_aliases": [tmp]})   # leftover of an interrupted run
     generate(key, tmp, settings)

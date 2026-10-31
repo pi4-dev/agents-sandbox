@@ -1,7 +1,7 @@
 #!/bin/bash
 # End-to-end check of the as-net-blind topology on real containers.
 #
-# Starts as-dns, as-squid, as-ingress and the netshoot and Hermes sidecars from
+# Starts as-dns, as-squid, as-ingress, as-llm-gw and the netshoot and Hermes sidecars from
 # docker-compose.yaml (the *.example env files, a veth as the macvlan parent),
 # the real Claude bridge (its image is built; BRIDGE_PULL_POLICY=never uses a
 # prebuilt agents-sandbox/claude-bridge), and small stand-ins for Open WebUI, Hermes,
@@ -92,7 +92,7 @@ DNS_IP=$(envval DNS_IP) INGRESS_IP=$(envval INGRESS_IP) PROXY_PORT=3128
 BLIND=${COMPOSE_PROJECT_NAME}_as-net-blind VLAN=${COMPOSE_PROJECT_NAME}_as-net-vlan
 
 docker compose build -q as-squid
-docker compose up -d --quiet-pull as-dns as-squid as-ingress as-netshoot-net as-netshoot as-hermes-net \
+docker compose up -d --quiet-pull as-dns as-squid as-ingress as-llm-gw as-netshoot-net as-netshoot as-hermes-net \
   as-claude-net as-claude-bridge-net
 docker compose up -d --no-deps as-open-webui as-hermes as-litellm as-claude-main as-claude-bridge
 
@@ -146,6 +146,34 @@ got=$(code as-litellm http://openrouter.ai/)
 check "LiteLLM -> openrouter.ai passes Squid's ACL (503: no DNS in the test; got $got)" test "$got" = 503
 got=$(code as-netshoot http://openrouter.ai/)
 check "agent -> openrouter.ai -> 403 (got $got)" test "$got" = 403
+# as-llm-gw: Hermes reaches LiteLLM only through it. The LiteLLM stand-in answers on
+# :4000 with the headers the real one adds: llm_provider-* (the upstream's own) and
+# x-litellm-model-* (api_base, the deployment's model), next to x-litellm-key-spend.
+docker exec -i as-litellm sh -c 'cat >/tmp/fake-litellm.sh' <<'EOF_FAKE'
+while IFS= read -r line; do
+  case $line in ''|"$(printf '\r')") break ;; esac
+done
+body='{"data":[]}'
+printf 'HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nllm_provider-server: envoy\r\nllm_provider-x-upstream: qwen.svc.cluster.local\r\nx-litellm-model-api-base: http://upstream.example/v1\r\nx-litellm-model-name: openai/real-model\r\nx-litellm-key-spend: 0.0\r\nContent-Length: %s\r\nConnection: close\r\n\r\n%s' "${#body}" "$body"
+EOF_FAKE
+docker exec -d as-litellm socat TCP-LISTEN:4000,fork,reuseaddr EXEC:'sh /tmp/fake-litellm.sh'
+sleep 1
+heads() { docker exec "$1" curl -s -D - -o /dev/null --noproxy '*' --max-time 5 "$2" || true; }
+status() { docker exec "$1" curl -s -o /dev/null -w '%{http_code}' --noproxy '*' --max-time 5 "$2" || true; }
+upstream_heads() { grep -qi '^llm_provider-server' <<<"$1" && grep -qi '^x-litellm-model-api-base' <<<"$1"; }
+direct=$(heads as-netshoot http://litellm.as.internal:4000/v1/models)
+check "control: the LiteLLM stand-in sends llm_provider-* and x-litellm-model-*" upstream_heads "$direct"
+via=$(heads as-hermes-net http://llm.as.internal:4000/v1/models)
+check "Hermes -> as-llm-gw /v1/models -> 200 from LiteLLM" grep -qE '^HTTP/[0-9.]+ 200' <<<"$via"
+check_not "as-llm-gw drops llm_provider-* headers" grep -qi '^llm_provider-' <<<"$via"
+check_not "as-llm-gw drops x-litellm-model-* headers" grep -qi '^x-litellm-model-' <<<"$via"
+check "as-llm-gw keeps x-litellm-key-spend" grep -qi '^x-litellm-key-spend' <<<"$via"
+for path in /openapi.json /redoc /health/readiness /.well-known/litellm-ui-config /metrics /key/list /v1/embeddings; do
+  got=$(status as-hermes-net "http://llm.as.internal:4000$path")
+  check "Hermes -> as-llm-gw $path -> 404, not passed on (got $got)" test "$got" = 404
+done
+got=$(status as-hermes-net http://litellm.as.internal:4000/v1/models)
+check "Hermes -> LiteLLM directly is dropped (got $got)" test "$got" = 000
 # Claude: the agent and the bridge in separate namespaces; :9090 from LiteLLM only
 # bridge <container> <url> [curl args]: HTTP status (000 = no connection)
 bridge() { docker exec "$1" curl -s -o /dev/null -w '%{http_code}' --noproxy '*' --max-time 4 "${@:3}" "$2" || true; }

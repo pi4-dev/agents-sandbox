@@ -77,6 +77,10 @@ if [ $mode = local ]; then
       echo "check-env: warning: $ex changed after your $f (git pull?); review: diff -u $f $ex" >&2
     fi
   done
+  # Hermes' firewall lets it reach LiteLLM only through as-llm-gw
+  if [ -f hermes/config.yaml ] && grep -vE '^[[:space:]]*#' hermes/config.yaml | grep -q 'litellm\.as\.internal'; then
+    err "hermes/config.yaml: litellm.as.internal is dropped by Hermes' firewall; use the gateway: api: \"http://llm.as.internal:4000/v1\""
+  fi
 fi
 
 # --- values that must match ---
