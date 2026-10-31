@@ -252,10 +252,21 @@ Known limitations:
   admin. Keep `HERMES_DASHBOARD_ALLOW_FROM` and the router rules narrow.
 - **Hermes can change its own settings.** `/opt/data/.env` overrides the container
   environment, and the agent can write it. `hermes/managed.env` and the read-only
-  `config.yaml` pin a few keys, but that is configuration: a `HERMES_MANAGED_DIR` line in
-  `/opt/data/.env` points Hermes at a managed directory the agent controls, and
-  `HERMES_WRITE_SAFE_ROOT` limits the file tools, not the terminal. What Hermes can
-  write on the host is set by its mounts (`hermes/data`, `hermes/workspace`).
+  `config.yaml` pin a few keys, but that is configuration, checked inside the gateway
+  process the agent runs in:
+  - The gateway's `reload.env` RPC loads `/opt/data/.env` into the running gateway
+    without the managed layer, so a value the agent wrote there (e.g. a wider
+    `HERMES_WRITE_SAFE_ROOT`) applies at once; the pins return by the next restart at
+    the latest. Any process with Hermes' UID can call it: the gateway's control
+    socket and loopback WebSocket check only the peer UID. The agent has used this.
+  - A `HERMES_MANAGED_DIR` line in `/opt/data/.env` points Hermes at a managed
+    directory the agent controls.
+  - `HERMES_WRITE_SAFE_ROOT` limits the file tools, not the terminal.
+
+  The boundary is Hermes' UID and its mounts. On the host it writes only `hermes/data`
+  and `hermes/workspace`; in the container, scratch space such as `/tmp` (the image's
+  code is not writable for it). Whatever Hermes must not write belongs to root or is
+  mounted `:ro`, never to its UID.
 - **`as-netshoot` reaches everything** in `as-net-blind`, and the sidecars admit it.
   Whoever can `docker exec` already controls every container; the bridge still
   requires `CLAUDE_OAI_KEY`. Nothing can connect to netshoot.
