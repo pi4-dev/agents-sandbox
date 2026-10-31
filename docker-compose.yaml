@@ -104,6 +104,13 @@ services:
         read_only: true
         bind:
           create_host_path: false
+      # persona (hermes/SOUL.md.example): edited on the host only
+      - type: bind
+        source: ./hermes/SOUL.md
+        target: /opt/data/SOUL.md
+        read_only: true
+        bind:
+          create_host_path: false
 
     network_mode: service:as-hermes-net
 

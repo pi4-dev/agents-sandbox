@@ -121,6 +121,13 @@ managed = hermes_mounts.get("/etc/hermes/.env", {})
 check(managed.get("type") == "bind" and managed.get("source", "").endswith("/hermes/managed.env")
       and managed.get("read_only") is True and (managed.get("bind") or {}).get("create_host_path") is False,
       "as-hermes: hermes/managed.env read-only at /etc/hermes/.env, never created by Docker")
+soul = hermes_mounts.get("/opt/data/SOUL.md", {})
+check(soul.get("type") == "bind" and soul.get("source", "").endswith("/hermes/SOUL.md")
+      and soul.get("read_only") is True and (soul.get("bind") or {}).get("create_host_path") is False,
+      "as-hermes: hermes/SOUL.md read-only at /opt/data/SOUL.md, never created by Docker")
+soul_parts = [p for p in open("hermes/SOUL.md.example").read().split("\n\n") if p.strip()]
+check(len(soul_parts) > 1,
+      "hermes/SOUL.md.example: more than the image's default persona (an unedited default is rewritten, which fails read-only)")
 check(not [t for t in hermes_mounts if t == "/etc/hermes" or t.startswith("/etc/hermes/") and t != "/etc/hermes/.env"],
       "as-hermes: nothing else mounted in /etc/hermes (the image keeps files there)")
 check("HERMES_MANAGED_DIR" not in env["as-hermes"], "as-hermes: HERMES_MANAGED_DIR unset (managed scope in /etc/hermes)")

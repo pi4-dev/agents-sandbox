@@ -37,5 +37,6 @@ node_modules/
 squid/conf/*
 !squid/conf/*.example
 hermes/config.yaml
+hermes/SOUL.md
 # your additions to as-dns (dns/Corefile imports them)
 dns/local.d/*.conf

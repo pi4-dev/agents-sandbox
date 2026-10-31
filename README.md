@@ -34,7 +34,7 @@ dns/                           CoreDNS config (Corefile) and your additions (loc
 ingress/                       as-ingress config (Caddyfile) and its dashboard template
 claude-main/                   Claude agent image, policy and environment example
 claude-bridge/                 Claude bridge: server.mjs, its image and environment example (home/, workspace/: runtime)
-hermes/                        Hermes configuration (config.yaml.example), managed settings (managed.env.example), environment example
+hermes/                        Hermes configuration (config.yaml.example), managed settings (managed.env.example), persona (SOUL.md.example), environment example
 fw/                            Network namespace firewall rules (fw.sh)
 litellm/                       LiteLLM model/database configuration
 open-webui/                    Web UI environment example
@@ -169,7 +169,7 @@ Edit `.env` only (`VLAN_*`, `PROXY_IP`, `INGRESS_IP`, `BLIND_*`, `DNS_IP`, `LLM_
 
 ### Day-to-day
 
-- **Local configuration is yours.** Git tracks only `squid/conf/*.example`, `hermes/config.yaml.example` and `hermes/managed.env.example`; `./gen-secrets.sh` creates `squid/conf/squid.conf`, the lists, `lan.hosts`, `hermes/config.yaml` and `hermes/managed.env` from them, and `git pull` never touches your copies. as-dns additions go into `dns/local.d/*.conf`, which the tracked `dns/Corefile` imports ([dns/local.d/README.md](dns/local.d/README.md); no `forward` out of `as-net-blind`).
+- **Local configuration is yours.** Git tracks only `squid/conf/*.example`, `hermes/config.yaml.example`, `hermes/managed.env.example` and `hermes/SOUL.md.example`; `./gen-secrets.sh` creates `squid/conf/squid.conf`, the lists, `lan.hosts`, `hermes/config.yaml`, `hermes/managed.env` and `hermes/SOUL.md` from them, and `git pull` never touches your copies. as-dns additions go into `dns/local.d/*.conf`, which the tracked `dns/Corefile` imports ([dns/local.d/README.md](dns/local.d/README.md); no `forward` out of `as-net-blind`).
   - Edit your copies, then run `squid/reload_squid.sh` (validates and reloads without restarting the container).
   - When a pull changes an `.example`, `check-env.sh` and `gen-secrets.sh` warn and print the `diff -u` to review. Take over what you want, then `touch` your copy to mark it reviewed.
   - `squid.conf` carries the policy (SSL bump, GitHub and npm write rules): review its changes in particular.
@@ -182,6 +182,9 @@ Edit `.env` only (`VLAN_*`, `PROXY_IP`, `INGRESS_IP`, `BLIND_*`, `DNS_IP`, `LLM_
   - `hermes/config.yaml` (read-only) for what the gateway takes from it, e.g. `security.redact_secrets: true`;
   - `hermes/managed.env`, mounted read-only as Hermes' managed scope (`/etc/hermes/.env`) and loaded last on every reload of its env: `HERMES_WRITE_SAFE_ROOT=/opt/data:/workspace` (`write_file`/`patch` only in the read-write mounts; the image default is `/opt/data` alone), `HERMES_ALLOW_PRIVATE_URLS=false`, `HERMES_ENABLE_PROJECT_PLUGINS=false`, and an empty `HERMES_EPHEMERAL_SYSTEM_PROMPT` and `HERMES_PREFILL_MESSAGES_FILE` (no prompt text from `.env`). No secrets in it: Hermes, and therefore the agent, reads it.
   - After an edit: `docker compose up -d --force-recreate as-hermes`. `docker exec as-hermes hermes doctor` then reports `Managed scope active: … env key(s) pinned by /etc/hermes`; a line `managed dir set via HERMES_MANAGED_DIR` means the scope was redirected (see [Security model](#security-model)).
+- **Hermes persona:** `hermes/SOUL.md`, mounted read-only at `/opt/data/SOUL.md`, so neither the agent nor the dashboard can rewrite it. Edit it on the host, then `docker compose up -d --force-recreate as-hermes`: an editor that replaces the file leaves the container on the old copy.
+  - Keep text of your own in it beyond the image's default persona (the example's "This environment" section). Hermes rewrites an unedited default or an old template in place; on a read-only file that stops it from starting.
+  - The persona used before stays in `hermes/data/SOUL.md`, hidden by the mount; `gen-secrets.sh` points at it when it creates `hermes/SOUL.md`.
 - DNS queries (agents, LiteLLM, Open WebUI): `docker compose logs as-dns` (10 × 10 MB kept). A query for an external name from an agent is worth a look.
 - Pin versions with `CLAUDE_CODE_VERSION` and the `*_IMAGE` variables in `.env`.
 
@@ -262,6 +265,10 @@ Known limitations:
   - A `HERMES_MANAGED_DIR` line in `/opt/data/.env` points Hermes at a managed
     directory the agent controls.
   - `HERMES_WRITE_SAFE_ROOT` limits the file tools, not the terminal.
+  - The read-only `SOUL.md` fixes the file, not its use: `HERMES_IGNORE_RULES` in
+    `/opt/data/.env` skips it, `HERMES_HOME` there points Hermes at another home with
+    its own `SOUL.md` and `config.yaml`, and its memory and skills in `hermes/data`
+    stay writable.
 
   The boundary is Hermes' UID and its mounts. On the host it writes only `hermes/data`
   and `hermes/workspace`; in the container, scratch space such as `/tmp` (the image's
