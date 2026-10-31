@@ -141,8 +141,12 @@ rw = sorted(t for t, v in hermes_mounts.items() if v.get("type") == "bind" and n
 check(sorted(pins.get("HERMES_WRITE_SAFE_ROOT", "").split(":")) == rw,
       f"managed.env: HERMES_WRITE_SAFE_ROOT = the read-write mounts of as-hermes {rw}")
 for k, want in [("HERMES_ALLOW_PRIVATE_URLS", "false"), ("HERMES_ENABLE_PROJECT_PLUGINS", "false"),
-                ("HERMES_EPHEMERAL_SYSTEM_PROMPT", ""), ("HERMES_PREFILL_MESSAGES_FILE", "")]:
+                ("HERMES_EPHEMERAL_SYSTEM_PROMPT", ""), ("HERMES_PREFILL_MESSAGES_FILE", ""),
+                ("HERMES_IGNORE_RULES", "false")]:
     check(pins.get(k) == want, f"managed.env: {k}={want}")
+home_dirs = {t.rsplit("/", 1)[0] for t in ("/opt/data/config.yaml", "/opt/data/SOUL.md") if t in hermes_mounts}
+check(pins.get("HERMES_HOME") == "/opt/data" and "/opt/data" in hermes_mounts and home_dirs == {"/opt/data"},
+      "managed.env: HERMES_HOME=/opt/data, where the data volume and the read-only config.yaml and SOUL.md are")
 hermes_cfg = open("hermes/config.yaml.example").read()
 check(re.search(r"(?m)^security:\n(?:[ \t]*(?:#.*)?\n)*[ \t]+redact_secrets:[ \t]*true[ \t]*$", hermes_cfg) is not None,
       "hermes/config.yaml: security.redact_secrets is true")
