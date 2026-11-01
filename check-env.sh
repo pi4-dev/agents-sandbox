@@ -10,7 +10,7 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-SERVICE_ENVS=(claude-main/claude claude-bridge/claude-bridge hermes/hermes litellm/litellm litellm/litellm-db open-webui/open-webui zenoh/zenoh)
+SERVICE_ENVS=(claude-main/claude claude-bridge/claude-bridge hermes/hermes litellm/litellm litellm/litellm-db open-webui/open-webui zenoh/zenoh claude-qwen/claude-qwen)
 
 if [ "${1:-}" = --examples ]; then mode=examples sfx=.example; else mode=local sfx=; fi
 fail=0
@@ -100,8 +100,9 @@ if [ -f "$db" ] && [ -f "$ll" ]; then
   fi
   master=$(get "$ll" LITELLM_MASTER_KEY)
   # client keys: registered by as-litellm-keys, so they must be valid LiteLLM virtual keys
-  seen=
-  for pair in "hermes/hermes.env$sfx LITELLM_API_KEY" "open-webui/open-webui.env$sfx OPENAI_API_KEY"; do
+  seen_all=" "
+  for pair in "hermes/hermes.env$sfx LITELLM_API_KEY" "open-webui/open-webui.env$sfx OPENAI_API_KEY" \
+              "claude-qwen/claude-qwen.env$sfx ANTHROPIC_AUTH_TOKEN"; do
     read -r f k <<<"$pair"
     [ -f "$f" ] || continue
     v=$(get "$f" "$k")
@@ -111,10 +112,10 @@ if [ -f "$db" ] && [ -f "$ll" ]; then
     if [ $mode = local ] && [[ $v != CHANGE_ME* ]] && ! [[ $v =~ ^sk-.{13,}$ ]]; then
       err "$k in $f must start with sk- and have at least 16 characters (LiteLLM rule)"
     fi
-    if [ -n "$v" ] && [ "$v" = "$seen" ]; then
+    if [ -n "$v" ] && [[ $v != CHANGE_ME* ]] && [[ $seen_all == *" $v "* ]]; then
       err "$k in $f is the same key as another client; each client needs its own"
     fi
-    seen=$v
+    seen_all+="$v "
   done
   if [ $mode = local ] && [ -n "$master" ] && [[ $master != sk-* ]]; then
     echo "check-env: warning: LITELLM_MASTER_KEY should start with sk- (LiteLLM convention)" >&2
@@ -193,7 +194,8 @@ fi
 # (Claude Code stores the login in ~/.claude/.credentials.json and ~/.claude.json)
 if [ $mode = local ]; then
   bridge_ws=$(get .env CLAUDE_BRIDGE_WORKSPACE) bridge_home=$(get .env CLAUDE_BRIDGE_HOME)
-  for d in claude-main/data/workspace claude-main/data/claude-home "${bridge_ws:-./claude-bridge/workspace}" \
+  for d in claude-main/data/workspace claude-main/data/claude-home claude-qwen/data/workspace claude-qwen/data/claude-home \
+           "${bridge_ws:-./claude-bridge/workspace}" \
            "${bridge_home:-./claude-bridge/home}"; do
     d=${d#./}
     if [ ! -d "$d" ]; then
@@ -233,13 +235,14 @@ fi
 # --- message bus: each system's password equals its login in zenoh.env, every login has an ACL ---
 ze=zenoh/zenoh.env$sfx
 if [ -f "$ze" ]; then
-  for pair in "hermes/hermes.env$sfx ZENOH_PASSWORD_HERMES" "claude-main/claude.env$sfx ZENOH_PASSWORD_CLAUDE"; do
+  for pair in "hermes/hermes.env$sfx ZENOH_PASSWORD_HERMES" "claude-main/claude.env$sfx ZENOH_PASSWORD_CLAUDE" \
+              "claude-qwen/claude-qwen.env$sfx ZENOH_PASSWORD_CLAUDE_QWEN"; do
     read -r f k <<<"$pair"
     if [ -f "$f" ] && [ "$(get "$f" "$k")" != "$(get "$ze" "$k")" ]; then
       err "$k differs between $f and $ze (the system logs in to as-zenoh with it)"
     fi
   done
-  logins=$(sed -nE 's/^[[:space:]]*ZENOH_PASSWORD_([A-Z0-9_]+)[[:space:]]*=.*/\1/p' "$ze" | tr '[:upper:]' '[:lower:]' | sort -u)
+  logins=$(sed -nE 's/^[[:space:]]*ZENOH_PASSWORD_([A-Z0-9_]+)[[:space:]]*=.*/\1/p' "$ze" | tr '[:upper:]_' '[:lower:]-' | sort -u)
   acl=$(grep -vE '^[[:space:]]*//' zenoh/conf/zenoh.json5 | grep -oE 'usernames:[[:space:]]*\[[^]]*\]' |
         grep -oE '"[^"]+"' | tr -d '"' | sort -u)
   if [ "$logins" != "$acl" ]; then

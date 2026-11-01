@@ -38,7 +38,7 @@ for ex in squid/conf/*.example hermes/config.yaml.example hermes/managed.env.exa
   fi
 done
 
-FILES=(.env claude-main/claude.env claude-bridge/claude-bridge.env hermes/hermes.env litellm/litellm.env litellm/litellm-db.env open-webui/open-webui.env zenoh/zenoh.env)
+FILES=(.env claude-main/claude.env claude-bridge/claude-bridge.env hermes/hermes.env litellm/litellm.env litellm/litellm-db.env open-webui/open-webui.env zenoh/zenoh.env claude-qwen/claude-qwen.env)
 for f in "${FILES[@]}"; do
   if [ ! -f "$f" ]; then
     install -m 600 "$f.example" "$f"
@@ -53,11 +53,13 @@ declare -A GEN=(
   [CHANGE_ME_POSTGRES_PASSWORD]="$(hex 24)"
   [CHANGE_ME_LITELLM_KEY_HERMES]="sk-$(hex 24)"
   [CHANGE_ME_LITELLM_KEY_OPEN_WEBUI]="sk-$(hex 24)"
+  [CHANGE_ME_LITELLM_KEY_CLAUDE_QWEN]="sk-$(hex 24)"
   [CHANGE_ME_WEBUI_SECRET_KEY]="$(hex 32)"
   [CHANGE_ME_HERMES_DASHBOARD_USER]="admin"
   [CHANGE_ME_CLAUDE_OAI_KEY]="sk-$(hex 24)"
   [CHANGE_ME_ZENOH_PASSWORD_HERMES]="$(hex 24)"
   [CHANGE_ME_ZENOH_PASSWORD_CLAUDE]="$(hex 24)"
+  [CHANGE_ME_ZENOH_PASSWORD_CLAUDE_QWEN]="$(hex 24)"
 )
 
 # existing <ph>: the value already set elsewhere for the key(s) holding placeholder <ph>

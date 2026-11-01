@@ -96,10 +96,10 @@ BLIND=${COMPOSE_PROJECT_NAME}_as-net-blind VLAN=${COMPOSE_PROJECT_NAME}_as-net-v
 
 docker compose build -q as-squid
 docker compose up -d --quiet-pull as-dns as-squid as-ingress as-llm-gw as-zenoh as-netshoot-net as-netshoot \
-  as-hermes-net as-claude-net as-claude-bridge-net
+  as-hermes-net as-claude-net as-claude-bridge-net as-claude-qwen-net
 docker compose up -d --no-deps as-open-webui as-hermes as-litellm as-claude-main as-claude-bridge
 
-SIDECARS=(as-netshoot-net as-hermes-net as-claude-net as-claude-bridge-net)
+SIDECARS=(as-netshoot-net as-hermes-net as-claude-net as-claude-bridge-net as-claude-qwen-net)
 FAIL=0
 result() { printf '%s  %s\n' "$1" "$2"; [ "$1" = PASS ] || FAIL=$((FAIL + 1)); }
 check() { # check <description> <command...>: the command succeeds
@@ -177,6 +177,13 @@ for path in /openapi.json /redoc /health/readiness /.well-known/litellm-ui-confi
 done
 got=$(status as-hermes-net http://litellm.as.internal:4000/v1/models)
 check "Hermes -> LiteLLM directly is dropped (got $got)" test "$got" = 000
+# as-claude-qwen: Claude Code's Anthropic API through as-llm-gw, nothing of LiteLLM directly
+got=$(status as-claude-qwen-net http://llm.as.internal:4000/v1/messages)
+check "Claude on Qwen -> as-llm-gw /v1/messages -> LiteLLM (got $got)" test "$got" = 200
+got=$(status as-claude-qwen-net http://llm.as.internal:4000/openapi.json)
+check "Claude on Qwen -> as-llm-gw /openapi.json -> 404 (got $got)" test "$got" = 404
+got=$(status as-claude-qwen-net http://litellm.as.internal:4000/v1/models)
+check "Claude on Qwen -> LiteLLM directly is dropped (got $got)" test "$got" = 000
 gwlog=$(cat llm-gw/logs/access.log 2>/dev/null || true)
 check "llm-gw/logs/access.log has Hermes' /v1/models (200)" \
   grep -qE '"uri":"/v1/models".*"status":200' <<<"$gwlog"
@@ -231,6 +238,8 @@ docker run -d --name asbt-zsub --network container:as-claude-net -v "$W/zc.py:/z
 for _ in $(seq 1 20); do docker logs asbt-zsub 2>&1 | grep -q SUBSCRIBED && break; sleep 1; done
 check "Claude subscribes to the bus from its namespace" grep -q SUBSCRIBED <<<"$(docker logs asbt-zsub 2>&1)"
 check "Hermes publishes under as/hermes" grep -q PUBLISHED <<<"$(zc as-hermes-net hermes "$(zpw HERMES)" pub as/hermes/test 'hello from hermes')"
+check "Claude on Qwen publishes under as/claude-qwen" \
+  grep -q PUBLISHED <<<"$(zc as-claude-qwen-net claude-qwen "$(zpw CLAUDE_QWEN)" pub as/claude-qwen/test 'hello from qwen')"
 zc as-hermes-net hermes "$(zpw HERMES)" pub as/claude/test 'spoofed by hermes' >/dev/null
 check "a wrong password is refused" grep -q REFUSED <<<"$(zc as-hermes-net hermes wrong pub as/hermes/test 'wrong password')"
 check "no login is refused (as-net-blind container without a sidecar)" grep -q REFUSED <<<"$(docker run --rm \
@@ -240,6 +249,7 @@ check_not "the bridge's namespace cannot reach the bus" \
 sleep 2
 zsub=$(docker logs asbt-zsub 2>&1)
 check "Claude receives Hermes' message" grep -q 'GOT as/hermes/test hello from hermes' <<<"$zsub"
+check "Claude receives the message of Claude on Qwen" grep -q 'GOT as/claude-qwen/test hello from qwen' <<<"$zsub"
 check_not "the ACL drops Hermes' message under as/claude" grep -q spoofed <<<"$zsub"
 zlog=$(cat zenoh/logs/messages-*.jsonl 2>/dev/null || true)
 check "the message log on the host has Hermes' message" \

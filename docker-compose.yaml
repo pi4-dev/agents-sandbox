@@ -222,10 +222,11 @@ services:
       - ./litellm/litellm.env
       - hermes/hermes.env
       - open-webui/open-webui.env
+      - claude-qwen/claude-qwen.env
     environment:
       LITELLM_URL: http://as-litellm:4000
       # alias in LiteLLM = env variable holding the key
-      LITELLM_CLIENT_KEYS: "hermes=LITELLM_API_KEY open-webui=OPENAI_API_KEY"
+      LITELLM_CLIENT_KEYS: "hermes=LITELLM_API_KEY open-webui=OPENAI_API_KEY claude-qwen=ANTHROPIC_AUTH_TOKEN"
     volumes:
       - ./litellm/litellm-keys.py:/scripts/litellm-keys.py:ro
     networks:
@@ -462,6 +463,61 @@ services:
     tty: true
     restart: unless-stopped
     # the OpenAI bridge runs in as-claude-bridge; this is only for agent sessions (start-main.sh)
+    command: ["sh", "-c", "trap 'exit 0' TERM INT; sleep infinity & wait"]
+
+# - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+  # Claude Code on a model of LiteLLM (CLAUDE_QWEN_MODEL), like Hermes: LiteLLM only
+  # through as-llm-gw, its own LiteLLM key (alias claude-qwen), the web through Squid
+  as-claude-qwen-net:
+    <<: *fw-sidecar
+    container_name: as-claude-qwen-net
+    hostname: claude-qwen
+    environment:
+      <<: *fw-env
+      ALLOW_IN: >-
+        any::netshoot.as.internal
+      ALLOW_OUT: >-
+        tcp:llm.as.internal:4000
+        tcp:zenoh.as.internal:7447
+      FW_LOG: 1
+    volumes:
+      - ./fw/fw.sh:/fw.sh:ro
+    networks:
+      as-net-blind:
+        aliases: [claude-qwen.as.internal]
+
+  as-claude-qwen:
+    <<: *claude-image
+    container_name: as-claude-qwen
+    network_mode: service:as-claude-qwen-net
+    depends_on:
+      as-claude-qwen-net: { condition: service_healthy }
+      as-llm-gw: { condition: service_started }
+      as-litellm-keys: { condition: service_completed_successfully }
+    env_file:
+      - proxy.env
+      - claude-qwen/claude-qwen.env            # ANTHROPIC_AUTH_TOKEN: its LiteLLM key
+    environment:
+      # the Anthropic API of LiteLLM (/v1/messages) through as-llm-gw; no Anthropic login
+      ANTHROPIC_BASE_URL: http://llm.as.internal:4000
+      ANTHROPIC_MODEL: &claude-qwen-model ${CLAUDE_QWEN_MODEL:?set it in .env (a model_name from litellm/models)}
+      ANTHROPIC_DEFAULT_OPUS_MODEL: *claude-qwen-model
+      ANTHROPIC_DEFAULT_SONNET_MODEL: *claude-qwen-model
+      ANTHROPIC_DEFAULT_HAIKU_MODEL: *claude-qwen-model
+      CLAUDE_CODE_SUBAGENT_MODEL: *claude-qwen-model
+      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"
+      # message bus (as-zenoh); the password is ZENOH_PASSWORD_CLAUDE_QWEN in its env file
+      ZENOH_CONNECT: tcp/zenoh.as.internal:7447
+      ZENOH_USER: claude-qwen
+    volumes:
+      - ./claude-qwen/data/workspace:/workspace
+      - ./claude-qwen/data/claude-home:/home/node        # settings and sessions survive restarts
+      - ./claude-main/policy:/etc/claude-code:ro         # the same managed settings as the Claude agent
+      - ./claude-qwen/CLAUDE.md:/home/node/.claude/CLAUDE.md:ro
+    stdin_open: true
+    tty: true
+    restart: unless-stopped
     command: ["sh", "-c", "trap 'exit 0' TERM INT; sleep infinity & wait"]
 
 # - - - - - - - - - - - - - - - - - - - - - - - - - - -

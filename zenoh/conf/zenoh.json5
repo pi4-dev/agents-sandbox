@@ -40,6 +40,13 @@
         key_exprs: ["as/claude/**"],
       },
       {
+        id: "own-claude-qwen",
+        messages: ["put", "delete", "declare_queryable", "reply", "liveliness_token"],
+        flows: ["ingress"],
+        permission: "allow",
+        key_exprs: ["as/claude-qwen/**"],
+      },
+      {
         // subscribe to, query and watch the whole bus
         id: "bus-read",
         messages: ["declare_subscriber", "query", "declare_liveliness_subscriber", "liveliness_query"],
@@ -60,10 +67,12 @@
     subjects: [
       { id: "hermes", usernames: ["hermes"] },
       { id: "claude", usernames: ["claude"] },
+      { id: "claude-qwen", usernames: ["claude-qwen"] },
     ],
     policies: [
       { rules: ["own-hermes", "bus-read", "bus-deliver"], subjects: ["hermes"] },
       { rules: ["own-claude", "bus-read", "bus-deliver"], subjects: ["claude"] },
+      { rules: ["own-claude-qwen", "bus-read", "bus-deliver"], subjects: ["claude-qwen"] },
     ],
   },
 }

@@ -84,7 +84,7 @@ for name, s in svc.items():
 want_aliases = {
     "as-dns": "dns", "as-squid": "proxy", "as-litellm": "litellm", "as-open-webui": "open-webui",
     "as-hermes-net": "hermes", "as-netshoot-net": "netshoot", "as-ingress": "ingress",
-    "as-claude-net": "claude dev-ws01", "as-claude-bridge-net": "claude-bridge", "as-llm-gw": "llm", "as-zenoh": "zenoh",
+    "as-claude-net": "claude dev-ws01", "as-claude-bridge-net": "claude-bridge", "as-claude-qwen-net": "claude-qwen", "as-llm-gw": "llm", "as-zenoh": "zenoh",
 }
 for name, want in want_aliases.items():
     for a in want.split():
@@ -104,7 +104,7 @@ for name in [n for n in svc if n.endswith("-net")]:
     check("as-dns" in svc[name].get("depends_on", {}), f"{name}: starts after as-dns")
     check("dns" not in svc[name], f"{name}: no Docker-managed DNS (fw.sh writes resolv.conf)")
 
-for name in ["as-hermes", "as-claude-main", "as-claude-bridge", "as-netshoot"]:
+for name in ["as-hermes", "as-claude-main", "as-claude-bridge", "as-claude-qwen", "as-netshoot"]:
     check(env[name].get("HTTPS_PROXY") == proxy, f"{name}: HTTPS_PROXY is {proxy}")
 for k in ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"]:
     check(env["as-litellm"].get(k) == llm_proxy, f"as-litellm: {k} is {llm_proxy} (its own leg)")
@@ -226,6 +226,23 @@ check(env["as-hermes-net"].get("ALLOW_OUT") == "tcp:llm.as.internal:4000 tcp:zen
 
 # --- as-zenoh: the message bus, a login and an ACL per system, every message logged ---
 check(env["as-claude-net"].get("ALLOW_OUT") == "tcp:zenoh.as.internal:7447", "as-claude-net: out to the message bus only")
+
+# --- as-claude-qwen: Claude Code on a LiteLLM model, like Hermes ---
+check(env["as-claude-qwen-net"].get("ALLOW_OUT") == "tcp:llm.as.internal:4000 tcp:zenoh.as.internal:7447"
+      and env["as-claude-qwen-net"].get("ALLOW_IN") == "any::netshoot.as.internal",
+      "as-claude-qwen-net: out only to as-llm-gw and the bus, in only from netshoot")
+cq = env["as-claude-qwen"]
+check(svc["as-claude-qwen"].get("network_mode") == "service:as-claude-qwen-net", "as-claude-qwen: behind as-claude-qwen-net")
+check(cq.get("ANTHROPIC_BASE_URL") == "http://llm.as.internal:4000" and cq.get("ANTHROPIC_AUTH_TOKEN")
+      and "ANTHROPIC_API_KEY" not in cq, "as-claude-qwen: Anthropic API of LiteLLM through as-llm-gw, its own key")
+models_cq = {cq.get(k) for k in ("ANTHROPIC_MODEL", "ANTHROPIC_DEFAULT_OPUS_MODEL", "ANTHROPIC_DEFAULT_SONNET_MODEL",
+                                 "ANTHROPIC_DEFAULT_HAIKU_MODEL", "CLAUDE_CODE_SUBAGENT_MODEL")}
+check(len(models_cq) == 1 and None not in models_cq, f"as-claude-qwen: every Claude Code model slot is CLAUDE_QWEN_MODEL {models_cq}")
+keys_env = env["as-litellm-keys"].get("LITELLM_CLIENT_KEYS", "")
+check("claude-qwen=ANTHROPIC_AUTH_TOKEN" in keys_env.split() and env["as-litellm-keys"].get("ANTHROPIC_AUTH_TOKEN") == cq.get("ANTHROPIC_AUTH_TOKEN"),
+      "as-litellm-keys: registers the claude-qwen key")
+check(not [v for v in svc["as-claude-qwen"]["volumes"] if "claude-main/data" in v.get("source", "")],
+      "as-claude-qwen: own workspace and home, nothing from claude-main/data")
 check("zenoh" not in str(env["as-claude-bridge-net"].get("ALLOW_OUT", "")), "as-claude-bridge-net: not on the message bus")
 zen = svc["as-zenoh"]
 check(list(zen.get("networks", {})) == ["as-net-blind"], "as-zenoh: only on as-net-blind")
@@ -243,15 +260,15 @@ zver = zen.get("image", "").rpartition(":")[2]
 check(re.fullmatch(r"\d+\.\d+\.\d+", zver) is not None, f"as-zenoh: image pinned to a release ({zen.get('image')})")
 check(svc["as-claude-main"].get("build", {}).get("args", {}).get("ZENOH_VERSION") == zver
       and env["as-hermes"].get("ZENOH_VERSION") == zver, "agents get the router's client version")
-zen_users = sorted(k[len("ZENOH_PASSWORD_"):].lower() for k in env["as-zenoh"] if k.startswith("ZENOH_PASSWORD_"))
+zen_users = sorted(k[len("ZENOH_PASSWORD_"):].lower().replace("_", "-") for k in env["as-zenoh"] if k.startswith("ZENOH_PASSWORD_"))
 zen_cfg = open("zenoh/conf/zenoh.json5").read()
 zen_code = "\n".join(l for l in zen_cfg.splitlines() if not l.lstrip().startswith("//"))
 acl_users = sorted(re.findall(r'usernames:\s*\["([^"]+)"\]', zen_code))
 check(zen_users and zen_users == acl_users, f"as-zenoh: a login for each ACL subject {zen_users}")
-for agent, user in [("as-hermes", "hermes"), ("as-claude-main", "claude")]:
+for agent, user in [("as-hermes", "hermes"), ("as-claude-main", "claude"), ("as-claude-qwen", "claude-qwen")]:
     e = env[agent]
     check(e.get("ZENOH_USER") == user and e.get("ZENOH_CONNECT") == "tcp/zenoh.as.internal:7447"
-          and f"ZENOH_PASSWORD_{user.upper()}" in e, f"{agent}: logs in to the bus as {user}")
+          and "ZENOH_PASSWORD_" + user.upper().replace("-", "_") in e, f"{agent}: logs in to the bus as {user}")
 for user in acl_users:
     own = re.search(r'id:\s*"own-' + user + r'"(.*?)\}', zen_code, re.S)
     check(own and re.search(r'key_exprs:\s*\["as/' + user + r'/\*\*"\]', own.group(1))
@@ -291,6 +308,7 @@ key_routes = sorted(re.findall(r'"(/[^"]*)"', keys_default.group(1))) if keys_de
 check(key_routes and gw_paths and sorted(gw_paths.group(1).split()) == key_routes,
       f"as-llm-gw: forwards exactly the default client-key routes {key_routes}")
 check(not [r for r in key_routes if "embeddings" in r], "client keys: no embeddings route by default")
+check("/v1/messages" in key_routes, "client keys and as-llm-gw: the Anthropic API (/v1/messages) for Claude Code")
 check(re.search(r"(?m)^\s*reverse_proxy litellm\.as\.internal:4000 \{", gw_cfg) and re.search(r"(?m)^\s*respond 404\s*$", gw_cfg),
       "as-llm-gw: those routes to LiteLLM, everything else a 404")
 check(re.search(r"(?m)^\s*header_down -llm_provider-\*\s*$", gw_cfg) and re.search(r"(?m)^\s*header_down -x-litellm-model-\*\s*$", gw_cfg),

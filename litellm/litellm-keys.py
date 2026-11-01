@@ -9,7 +9,8 @@ accept exactly those values, so the stack starts in one `docker compose up`.
   LITELLM_MASTER_KEY   admin key
   LITELLM_CLIENT_KEYS  "alias=ENV_VAR ...", e.g. "hermes=LITELLM_API_KEY"
   LITELLM_CLIENT_ROUTES  routes the client keys may call, space-separated (default: chat
-                       and text completions, the model list; no embeddings, which no
+                       and text completions, Anthropic messages (Claude Code), the
+                       model list; no embeddings, which no
                        model in litellm/models serves). Explicit paths, because
                        LiteLLM's "llm_api_routes" group (the UI's "AI APIs") also
                        contains /model/info and /model_group/info, which show the
@@ -42,12 +43,14 @@ BASE = os.environ.get("LITELLM_URL", "http://as-litellm:4000").rstrip("/")
 MASTER = os.environ.get("LITELLM_MASTER_KEY", "")
 ROUTES = os.environ.get("LITELLM_CLIENT_ROUTES", " ".join((
     "/v1/chat/completions", "/chat/completions", "/v1/completions", "/completions",
-    "/v1/models", "/models"))).split()
+    "/v1/messages", "/v1/messages/count_tokens", "/v1/models", "/models"))).split()
 # default route lists of earlier versions: a key that still has one exactly was never
 # changed by hand, so it moves to ROUTES (a list set in the UI stays)
 PREVIOUS_DEFAULTS = [
     {"/v1/chat/completions", "/chat/completions", "/v1/completions", "/completions",
      "/v1/embeddings", "/embeddings", "/v1/models", "/models"},
+    {"/v1/chat/completions", "/chat/completions", "/v1/completions", "/completions",
+     "/v1/models", "/models"},
 ]
 # settings carried over to the new key on rotation (what the LiteLLM UI lets you set)
 CARRY = ("models", "max_budget", "budget_duration", "tpm_limit", "rpm_limit",

@@ -18,6 +18,7 @@ ssl/squid-ca.*
 
 # Runtime state / caches
 claude-main/data/
+claude-qwen/data/
 claude-bridge/home/
 claude-bridge/workspace/
 hermes/data/

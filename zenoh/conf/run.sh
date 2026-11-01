@@ -2,7 +2,7 @@
 # as-zenoh: the Zenoh router (zenoh.json5) and the message log, in one container.
 #
 # - Login dictionary: one user per ZENOH_PASSWORD_<NAME> in the environment
-#   (zenoh/zenoh.env), user <name> in lower case, written to /tmp (tmpfs).
+#   (zenoh/zenoh.env), user <name> in lower case with - for _, written to /tmp (tmpfs).
 # - Message log: the REST plugin, on 127.0.0.1 only, streams every put and delete of
 #   the bus as server-sent events; each one becomes a line in
 #   $LOG_DIR/messages-<UTC date>.jsonl (zenoh/logs/ on the host):
@@ -18,7 +18,7 @@ USERS=/tmp/zenoh-users.txt
 umask 077
 : >"$USERS"
 env | sed -n 's/^ZENOH_PASSWORD_\([A-Z0-9_]*\)=\(..*\)$/\1 \2/p' | while read -r name password; do
-  printf '%s:%s\n' "$(printf '%s' "$name" | tr '[:upper:]' '[:lower:]')" "$password" >>"$USERS"
+  printf '%s:%s\n' "$(printf '%s' "$name" | tr '[:upper:]_' '[:lower:]-')" "$password" >>"$USERS"
 done
 if [ ! -s "$USERS" ]; then
   echo "as-zenoh: no ZENOH_PASSWORD_<NAME> in the environment (zenoh/zenoh.env)" >&2

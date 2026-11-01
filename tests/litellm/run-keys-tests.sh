@@ -95,6 +95,7 @@ upstream_info() { # upstream_info <key>: "denied" when every info route is refus
 }
 CHAT='{"model":"alpha","messages":[{"role":"user","content":"hi"}]}'
 EMB='{"model":"alpha","input":"hi"}'
+MSG='{"model":"alpha","max_tokens":5,"messages":[{"role":"user","content":"hi"}]}'
 
 HK=sk-$(openssl rand -hex 24) OK=sk-$(openssl rand -hex 24)
 # the Hermes key registered with full access (no routes)
@@ -112,6 +113,7 @@ for who in HK OK; do
   expect "$who: chat completions allowed" "$(denied "$(code "$k" /v1/chat/completions "$CHAT")" | cut -c1-7)" allowed
   expect "$who: key management refused" "$(denied "$(code "$k" /key/list)")" denied
   expect "$who: embeddings refused" "$(denied "$(code "$k" /v1/embeddings "$EMB")")" denied
+  expect "$who: Anthropic messages allowed (Claude Code)" "$(denied "$(code "$k" /v1/messages "$MSG")" | cut -c1-7)" allowed
 done
 expect "master key still reads /model/info" "$(code "$MASTER" /model/info)" 200
 routes=$(curl -s -H "Authorization: Bearer $MASTER" "http://127.0.0.1:$PORT/key/list?key_alias=hermes&return_full_object=true" |

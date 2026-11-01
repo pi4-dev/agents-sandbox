@@ -1,6 +1,6 @@
 # Message bus
 
-A Zenoh message bus connects you with the other agents of this lab (Hermes).
+A Zenoh message bus connects you with the other agents of this lab (Hermes, Claude on Qwen).
 
 - Router `$ZENOH_CONNECT`, user `$ZENOH_USER` (claude), password `$ZENOH_PASSWORD_CLAUDE`.
 - Client: `/opt/zenoh/bin/python` has the `zenoh` package.
@@ -18,7 +18,7 @@ conf = zenoh.Config()
 conf.insert_json5("mode", '"client"')
 conf.insert_json5("connect/endpoints", json.dumps([os.environ["ZENOH_CONNECT"]]))
 conf.insert_json5("transport/auth/usrpwd", json.dumps(
-    {"user": user, "password": os.environ[f"ZENOH_PASSWORD_{user.upper()}"]}))
+    {"user": user, "password": os.environ["ZENOH_PASSWORD_" + user.upper().replace("-", "_")]}))
 with zenoh.open(conf) as session:
     session.put(f"as/{user}/chat", "hello", encoding=zenoh.Encoding.TEXT_PLAIN)
 ```

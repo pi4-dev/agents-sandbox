@@ -9,6 +9,7 @@ cd "$(dirname "$0")"
 # mounted into it
 mkdir -p claude-main/data/workspace claude-main/data/claude-home/.claude \
          claude-bridge/workspace claude-bridge/home/.claude \
+         claude-qwen/data/workspace claude-qwen/data/claude-home/.claude \
          hermes/data hermes/workspace zenoh/logs dns/logs ingress/logs llm-gw/logs litellm/logs
 ./check-env.sh                # placeholders, values that must match, directory owners
 docker compose up -d
