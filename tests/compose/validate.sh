@@ -238,6 +238,7 @@ check(cq.get("ANTHROPIC_BASE_URL") == "http://llm.as.internal:4000" and cq.get("
 models_cq = {cq.get(k) for k in ("ANTHROPIC_MODEL", "ANTHROPIC_DEFAULT_OPUS_MODEL", "ANTHROPIC_DEFAULT_SONNET_MODEL",
                                  "ANTHROPIC_DEFAULT_HAIKU_MODEL", "CLAUDE_CODE_SUBAGENT_MODEL")}
 check(len(models_cq) == 1 and None not in models_cq, f"as-claude-qwen: every Claude Code model slot is CLAUDE_QWEN_MODEL {models_cq}")
+check(cq.get("CLAUDE_CODE_EFFORT_LEVEL") == "medium", "as-claude-qwen: effort pinned to medium")
 keys_env = env["as-litellm-keys"].get("LITELLM_CLIENT_KEYS", "")
 check("claude-qwen=ANTHROPIC_AUTH_TOKEN" in keys_env.split() and env["as-litellm-keys"].get("ANTHROPIC_AUTH_TOKEN") == cq.get("ANTHROPIC_AUTH_TOKEN"),
       "as-litellm-keys: registers the claude-qwen key")

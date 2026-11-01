@@ -1,10 +1,9 @@
 #!/bin/bash
-# litellm/litellm-config.yaml + litellm/callbacks/system_messages.py against a
-# real LiteLLM: whatever system messages a client sends (Claude Code on
-# /v1/messages, OpenAI clients on /v1/chat/completions), an openai/ deployment
-# gets a chat/completions request (not the Responses API) with at most one system
-# message, and only as the first message (vLLM Qwen: "System message must be at
-# the beginning."). The upstream is tests/litellm/upstream-recorder.py.
+# litellm/litellm-config.yaml against a real LiteLLM: Claude Code's /v1/messages
+# reaches an openai/ deployment as one chat/completions request with the system
+# prompt as the first message, not as a Responses API request (an upstream may
+# rebuild that into several system messages; vLLM Qwen: "System message must be
+# at the beginning."). The upstream is tests/litellm/upstream-recorder.py.
 #
 # Needs docker; pulls the LiteLLM image from docker-compose.yaml.
 # Usage: tests/litellm/run-system-tests.sh
@@ -46,14 +45,13 @@ U = lambda c: {"role": "user", "content": c}
 A = lambda c: {"role": "assistant", "content": c}
 sysblocks = [{"type": "text", "text": "You are Claude Code", "cache_control": {"type": "ephemeral"}}, {"type": "text", "text": "Main"}]
 post("/v1/messages", {"model": "qwen", "max_tokens": 5, "system": sysblocks, "messages": [U("a")]})
-post("/v1/messages", {"model": "qwen", "max_tokens": 5, "system": "S", "messages": [S("X"), U("a"), A("b"), S("Y"), U("c")]})
-post("/v1/chat/completions", {"model": "qwen", "max_tokens": 5, "messages": [S("S"), S("X"), U("a"), A("b"), S("Y"), U("c")]})
-post("/v1/chat/completions", {"model": "qwen", "max_tokens": 5, "messages": [U("a")]})
+post("/v1/messages", {"model": "qwen", "max_tokens": 5, "system": "S", "messages": [U("a"), A("b"), U("c")]})
+post("/v1/chat/completions", {"model": "qwen", "max_tokens": 5, "messages": [S("S"), U("a")]})
 PY
 SH
 docker run --rm -e LITELLM_MASTER_KEY=sk-test -e LITELLM_LOCAL_MODEL_COST_MAP=True --entrypoint sh \
   -v "$W/config.yaml:/app/config.yaml:ro" -v "$W/models:/app/models:ro" \
-  -v "$REPO/litellm/callbacks:/app/callbacks:ro" -v "$REPO/tests/litellm/upstream-recorder.py:/t/upstream-recorder.py:ro" \
+  -v "$REPO/tests/litellm/upstream-recorder.py:/t/upstream-recorder.py:ro" \
   -v "$W/run.sh:/t/run.sh:ro" -v "$W:/w" "$LITELLM" /t/run.sh
 
 fail=0
@@ -62,12 +60,11 @@ expect() {
 }
 mapfile -t got <"$W/upstream.log"
 expect "messages, system blocks"                 "${got[0]:-}" "/v1/chat/completions system,user"
-expect "messages, system entries in messages"    "${got[1]:-}" "/v1/chat/completions system,user,assistant,user,user"
-expect "chat, two leading + one mid system"      "${got[2]:-}" "/v1/chat/completions system,user,assistant,user,user"
-expect "chat, no system (untouched)"             "${got[3]:-}" "/v1/chat/completions user"
-expect "one upstream request per client request" "${#got[@]}" 4
+expect "messages, conversation"                   "${got[1]:-}" "/v1/chat/completions system,user,assistant,user"
+expect "chat/completions unchanged"              "${got[2]:-}" "/v1/chat/completions system,user"
+expect "one upstream request per client request" "${#got[@]}" 3
 if [ "$fail" -ne 0 ]; then
   echo "--- upstream"; cat "$W/upstream.log"; echo "--- litellm (tail)"; tail -n 40 "$W/litellm.log"
   exit 1
 fi
-echo "all system-message tests passed"
+echo "all /v1/messages routing tests passed"

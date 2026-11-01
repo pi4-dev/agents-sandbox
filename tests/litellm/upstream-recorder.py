@@ -1,4 +1,4 @@
-"""Fake OpenAI-compatible upstream for tests/litellm/run-system-tests.sh.
+"""Fake OpenAI-compatible upstream for tests/litellm/run-messages-tests.sh.
 
 Prints one line per request: `<path> <role,role,...>` (roles of `messages`,
 or `responses-api` when the body is a Responses API request), answers 400 so

@@ -45,8 +45,8 @@ jobs:
       - uses: actions/checkout@v5
       - name: as-litellm-keys registers pre-generated keys in a real LiteLLM
         run: tests/litellm/run-keys-tests.sh
-      - name: LiteLLM sends one leading system message, over chat/completions
-        run: tests/litellm/run-system-tests.sh
+      - name: LiteLLM sends /v1/messages to openai/ deployments as chat/completions
+        run: tests/litellm/run-messages-tests.sh
 
   squid-acl:
     runs-on: ubuntu-24.04

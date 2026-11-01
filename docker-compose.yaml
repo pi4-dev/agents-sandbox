@@ -200,7 +200,6 @@ services:
       - ./litellm/models:/app/models:ro      # one file per API endpoint (include: in the config)
       - ./ssl/squid-ca.crt:/certs/proxy-ca.crt:ro
       - ./litellm/logging.json:/app/logging.json:ro
-      - ./litellm/callbacks:/app/callbacks:ro # request hooks (litellm_settings.callbacks)
       - ./litellm/logs:/var/log/litellm      # access.log: every request, rotated daily, 7 kept
     command: ["--config", "/app/config.yaml", "--port", "4000", "--log_config", "/app/logging.json"]
     healthcheck:
@@ -508,6 +507,7 @@ services:
       ANTHROPIC_DEFAULT_HAIKU_MODEL: *claude-qwen-model
       CLAUDE_CODE_SUBAGENT_MODEL: *claude-qwen-model
       CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"
+      CLAUDE_CODE_EFFORT_LEVEL: medium        # pinned: overrides /effort and settings in the session
       # message bus (as-zenoh); the password is ZENOH_PASSWORD_CLAUDE_QWEN in its env file
       ZENOH_CONNECT: tcp/zenoh.as.internal:7447
       ZENOH_USER: claude-qwen
