@@ -326,6 +326,37 @@ for name in ["as-hermes", "as-open-webui"]:
 dns = svc["as-dns"]
 check(dns.get("read_only") is True and dns.get("cap_drop") == ["ALL"], "as-dns: read-only, no capabilities but NET_BIND_SERVICE")
 
+# --- access logs: files in <service>/logs on the host, like squid/logs ---
+log_dirs = {"as-dns": ("/var/log/coredns", "/dns/logs"), "as-ingress": ("/var/log/caddy", "/ingress/logs"),
+            "as-llm-gw": ("/var/log/caddy", "/llm-gw/logs"), "as-litellm": ("/var/log/litellm", "/litellm/logs")}
+for name, (target, src) in log_dirs.items():
+    m = {v["target"]: v for v in svc[name].get("volumes", [])}.get(target, {})
+    check(m.get("source", "").endswith(src) and not m.get("read_only"), f"{name}: access log in {src[1:]} on the host")
+for name in ["as-dns", "as-ingress", "as-llm-gw"]:
+    sv = svc[name]
+    check(str(sv.get("user", "0")).split(":")[0] not in ("", "0", "root") and sv.get("read_only") is True
+          and sv.get("cap_drop") == ["ALL"], f"{name}: runs as LOGS_UID ({sv.get('user')}), read-only, no capabilities")
+check(str((svc["as-dns"].get("sysctls") or {}).get("net.ipv4.ip_unprivileged_port_start")) == "53",
+      "as-dns: binds :53 without root (in its own namespace)")
+check(str((svc["as-ingress"].get("sysctls") or {}).get("net.ipv4.ip_unprivileged_port_start")) == "80",
+      "as-ingress: binds :80 without root (in its own namespace)")
+check(svc["as-dns"].get("build", {}).get("context", "").endswith("/dns") and svc["as-dns"].get("pull_policy") == "build",
+      "as-dns: built from dns/ (CoreDNS and the log writer)")
+for f in ["ingress/Caddyfile", "llm-gw/Caddyfile"]:
+    code = "\n".join(l for l in open(f).read().splitlines() if not l.lstrip().startswith("#"))
+    check(re.search(r"log \{\s*output file /var/log/caddy/access\.log \{[^}]*roll_keep_for 7d", code),
+          f"{f}: access log to /var/log/caddy/access.log, 7 days kept")
+lc = json.load(open("litellm/logging.json"))
+fh = lc.get("handlers", {}).get("access_file", {})
+check(fh.get("class") == "logging.handlers.TimedRotatingFileHandler" and fh.get("filename") == "/var/log/litellm/access.log"
+      and fh.get("when") == "midnight" and fh.get("backupCount") == 7
+      and "access_file" in lc.get("loggers", {}).get("uvicorn.access", {}).get("handlers", []),
+      "litellm/logging.json: uvicorn access log to /var/log/litellm/access.log, daily, 7 kept")
+cmd = svc["as-litellm"].get("command", [])
+check("--log_config" in cmd and cmd[cmd.index("--log_config") + 1] == "/app/logging.json"
+      and {v["target"]: v for v in svc["as-litellm"]["volumes"]}.get("/app/logging.json", {}).get("read_only") is True,
+      "as-litellm: started with --log_config /app/logging.json (read-only)")
+
 if failures:
     sys.exit(f"compose validate: {len(failures)} check(s) failed")
 print("compose validate: all checks passed")

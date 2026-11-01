@@ -43,10 +43,12 @@ docker network create "$P" >/dev/null
 docker run -d --name "$P-db" --network "$P" -e POSTGRES_DB=litellm -e POSTGRES_USER=litellm \
   -e POSTGRES_PASSWORD=pw "$POSTGRES" >/dev/null
 for _ in $(seq 1 60); do docker exec "$P-db" pg_isready -U litellm >/dev/null 2>&1 && break; sleep 1; done
+mkdir "$W/llog"   # the access log, as litellm/logs in the stack (litellm/logging.json)
 docker run -d --name "$P-app" --network "$P" --network-alias as-litellm -p "127.0.0.1:$PORT:4000" \
   -e LITELLM_LOG="${LITELLM_TEST_LOG:-INFO}" -e LITELLM_MASTER_KEY="$MASTER" -e LITELLM_SALT_KEY="$(openssl rand -hex 32)" \
   -e DATABASE_URL=postgresql://litellm:pw@"$P-db":5432/litellm \
-  -v "$W/config.yaml:/app/config.yaml:ro" "$LITELLM" --config /app/config.yaml --port 4000 >/dev/null
+  -v "$W/config.yaml:/app/config.yaml:ro" -v "$REPO/litellm/logging.json:/app/logging.json:ro" -v "$W/llog:/var/log/litellm" \
+  "$LITELLM" --config /app/config.yaml --port 4000 --log_config /app/logging.json >/dev/null
 for _ in $(seq 1 120); do
   curl -sf "http://127.0.0.1:$PORT/health/liveliness" >/dev/null 2>&1 && break
   sleep 2
@@ -163,6 +165,11 @@ for where in uris logs; do
   done
   expect "no client key value in $([ $where = uris ] && echo 'request URIs' || echo "LiteLLM's log")" "$leaked" 0
 done
+
+# litellm/logging.json: every request in /var/log/litellm/access.log (litellm/logs in the stack)
+llog=$(cat "$W/llog/access.log" 2>/dev/null || true)
+expect "access log: the clients' /v1/models (200)" "$(grep -c '"GET /v1/models HTTP/1.1" 200' <<<"$llog" | awk '{print ($1 > 0) ? "yes" : "no"}')" yes
+expect "access log: the revoked key's /v1/models (401)" "$(grep -c '"GET /v1/models HTTP/1.1" 401' <<<"$llog" | awk '{print ($1 > 0) ? "yes" : "no"}')" yes
 
 for bad in CHANGE_ME_LITELLM_KEY_HERMES sk-short "$MASTER"; do
   if job "$bad" "$OK" >/dev/null; then result FAIL "invalid Hermes key is rejected"

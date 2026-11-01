@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "disable_existing_loggers": false,
+  "formatters": {
+    "default": {"()": "uvicorn.logging.DefaultFormatter", "fmt": "%(levelprefix)s %(message)s", "use_colors": false},
+    "access": {"()": "uvicorn.logging.AccessFormatter", "fmt": "%(asctime)s %(client_addr)s \"%(request_line)s\" %(status_code)s", "use_colors": false}
+  },
+  "handlers": {
+    "default": {"class": "logging.StreamHandler", "formatter": "default", "stream": "ext://sys.stderr"},
+    "access_console": {"class": "logging.StreamHandler", "formatter": "access", "stream": "ext://sys.stdout"},
+    "access_file": {"class": "logging.handlers.TimedRotatingFileHandler", "formatter": "access",
+                    "filename": "/var/log/litellm/access.log", "when": "midnight", "utc": true, "backupCount": 7, "encoding": "utf-8"}
+  },
+  "loggers": {
+    "uvicorn": {"handlers": ["default"], "level": "INFO", "propagate": false},
+    "uvicorn.error": {"level": "INFO"},
+    "uvicorn.access": {"handlers": ["access_console", "access_file"], "level": "INFO", "propagate": false}
+  }
+}

@@ -197,7 +197,9 @@ services:
       - ./litellm/litellm-config.yaml:/app/config.yaml:ro
       - ./litellm/models:/app/models:ro      # one file per API endpoint (include: in the config)
       - ./ssl/squid-ca.crt:/certs/proxy-ca.crt:ro
-    command: ["--config", "/app/config.yaml", "--port", "4000"]
+      - ./litellm/logging.json:/app/logging.json:ro
+      - ./litellm/logs:/var/log/litellm      # access.log: every request, rotated daily, 7 kept
+    command: ["--config", "/app/config.yaml", "--port", "4000", "--log_config", "/app/logging.json"]
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request,sys; sys.exit(0) if urllib.request.urlopen('http://127.0.0.1:4000/health/liveliness',timeout=4).status==200 else sys.exit(1)"]
       interval: 30s
@@ -238,9 +240,11 @@ services:
     image: ${CADDY_IMAGE:-caddy:2.8.4-alpine}
     container_name: as-llm-gw
     restart: unless-stopped
+    user: "${LOGS_UID:-1000}:${LOGS_GID:-1000}"     # owner of llm-gw/logs on the host
     volumes:
       - ./llm-gw:/etc/caddy:ro       # Caddyfile (a directory: edits are seen)
-    tmpfs: [/data, /config]
+      - ./llm-gw/logs:/var/log/caddy                 # access.log (Caddyfile), 7 days kept
+    tmpfs: ["/data:mode=1777", "/config:mode=1777"]
     dns: ["${DNS_IP}"]
     depends_on:
       as-dns: { condition: service_started }
@@ -529,17 +533,27 @@ services:
   # aliases below), nothing else, every query logged (dns/Corefile). Only on as-net-blind,
   # an internal network: Docker forwards none of its queries to an outside resolver.
   as-dns:
-    image: ${COREDNS_IMAGE:-coredns/coredns:1.12.4}
+    # CoreDNS of COREDNS_IMAGE on Alpine, which writes the query log to dns/logs/ (dns/run.sh)
+    build:
+      context: ./dns
+      args:
+        COREDNS_IMAGE: ${COREDNS_IMAGE:-coredns/coredns:1.12.4}
+    image: agents-sandbox/dns
+    pull_policy: build
     container_name: as-dns
     hostname: as-dns
     command: ["-conf", "/etc/coredns/Corefile"]
+    user: "${LOGS_UID:-1000}:${LOGS_GID:-1000}"     # owner of dns/logs on the host
     volumes:
       - ./dns:/etc/coredns:ro
+      - ./dns/logs:/var/log/coredns                  # queries-<UTC date>.log, 7 days kept
     networks:
       as-net-blind:
         # fixed: resolv.conf and dns: need an address; outside BLIND_IP_RANGE
         ipv4_address: ${DNS_IP:?set it in .env (see .env.example)}
         aliases: [dns.as.internal]
+    sysctls:
+      net.ipv4.ip_unprivileged_port_start: 53       # :53 without root, in its own namespace
     read_only: true
     cap_drop: [ALL]
     cap_add: [NET_BIND_SERVICE]
@@ -563,9 +577,11 @@ services:
       INGRESS_IP: ${INGRESS_IP:?set it in .env (see .env.example)}
       HERMES_DASHBOARD_ALLOW_FROM: ${HERMES_DASHBOARD_ALLOW_FROM:?set it in .env (see .env.example)}
       INGRESS_DASHBOARD_ALLOW_FROM: ${INGRESS_DASHBOARD_ALLOW_FROM:?set it in .env (see .env.example)}
+    user: "${LOGS_UID:-1000}:${LOGS_GID:-1000}"     # owner of ingress/logs on the host
     volumes:
       - ./ingress:/etc/caddy:ro      # Caddyfile and dashboard.html (a directory: edits are seen)
-    tmpfs: [/data, /config]
+      - ./ingress/logs:/var/log/caddy                # access.log (Caddyfile), 7 days kept
+    tmpfs: ["/data:mode=1777", "/config:mode=1777"]
     dns: ["${DNS_IP}"]
     depends_on:
       as-dns: { condition: service_started }
@@ -574,7 +590,9 @@ services:
         ipv4_address: ${INGRESS_IP}
       as-net-blind:
         aliases: [ingress.as.internal]
-    sysctls: *no-forwarding
+    sysctls:
+      <<: *no-forwarding
+      net.ipv4.ip_unprivileged_port_start: 80       # :80 without root, in its own namespace
     read_only: true
     cap_drop: [ALL]
     cap_add: [NET_BIND_SERVICE]      # the image's caddy binary carries this file capability

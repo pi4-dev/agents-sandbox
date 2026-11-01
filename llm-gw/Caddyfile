@@ -11,7 +11,8 @@
 #   x-litellm-model-* (api_base, the deployment's real model name and id).
 # - Error bodies pass unchanged.
 #
-# Access log: docker compose logs as-llm-gw. Edits apply on docker compose restart as-llm-gw.
+# Access log (JSON, Authorization redacted): llm-gw/logs/access.log, rolled at 10 MiB,
+# rolled files deleted after 7 days. Edits apply on docker compose restart as-llm-gw.
 {
 	admin off
 	auto_https off
@@ -19,7 +20,14 @@
 }
 
 :4000 {
-	log
+	log {
+		output file /var/log/caddy/access.log {
+			roll_size 10MiB
+			roll_uncompressed
+			roll_keep 100
+			roll_keep_for 7d
+		}
+	}
 	@client_routes path /v1/chat/completions /chat/completions /v1/completions /completions /v1/models /models
 	handle @client_routes {
 		reverse_proxy litellm.as.internal:4000 {

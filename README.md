@@ -32,14 +32,14 @@ proxy.env                      Agent proxy variables (by name)
 start-main.sh                  Generate missing secrets, check env files, start, attach to the agent
 gen-secrets.sh                 Create env files from the examples, fill generated CHANGE_ME_* values
 check-env.sh                   Placeholders, values that must match, no IPs outside .env
-dns/                           CoreDNS config (Corefile) and your additions (local.d/*.conf, git-ignored)
-ingress/                       as-ingress config (Caddyfile) and its dashboard template
+dns/                           CoreDNS config (Corefile), your additions (local.d/*.conf, git-ignored), image (Dockerfile, run.sh), query log (logs/)
+ingress/                       as-ingress config (Caddyfile), its dashboard template, access log (logs/)
 claude-main/                   Claude agent image, policy and environment example
 claude-bridge/                 Claude bridge: server.mjs, its image and environment example (home/, workspace/: runtime)
 hermes/                        Hermes configuration (config.yaml.example), managed settings (managed.env.example), persona (SOUL.md.example), environment example
 fw/                            Network namespace firewall rules (fw.sh)
-litellm/                       LiteLLM model/database configuration
-llm-gw/                        as-llm-gw config (Caddyfile): the agents' routes to LiteLLM
+litellm/                       LiteLLM model/database configuration, access log config (logging.json) and log (logs/)
+llm-gw/                        as-llm-gw config (Caddyfile): the agents' routes to LiteLLM; access log (logs/)
 zenoh/                         as-zenoh: router config and start script (conf/), logins (zenoh.env.example), message log (logs/)
 open-webui/                    Web UI environment example
 squid/                         Proxy image, entrypoint, error pages
@@ -76,7 +76,7 @@ In short:
 - **Dashboard** at `http://<INGRESS_IP>/` (`:80`, only from `INGRESS_DASHBOARD_ALLOW_FROM`): links to every published GUI, with a dot showing whether your browser reaches its port. Caddy builds the list on each request from the `# @dashboard <name> | <description> | <path>` lines in `ingress/Caddyfile`, so a new site with such a line shows up after `docker compose restart as-ingress`. Every path serves the dashboard; the Caddyfile itself is not served.
 - **GUIs through `as-ingress`** on `INGRESS_IP`, one port per GUI: Open WebUI `:8080`, LiteLLM `:4000` (API and `/ui`), Hermes dashboard `:9119` (only from `HERMES_DASHBOARD_ALLOW_FROM`). Caddy listens on its VLAN leg only.
 - **Names, not addresses.** Every service is reached by a `*.as.internal` name (`proxy`, `litellm`, `llm`, `zenoh`, `claude-bridge`, `hermes`, `open-webui`, `netshoot`, `dns`, `ingress`, `dev-ws01`). They are Docker network aliases in `docker-compose.yaml`, and Docker assigns the addresses (`BLIND_IP_RANGE`). Fixed addresses are only the VLAN legs (`PROXY_IP`, `INGRESS_IP`) and `DNS_IP`, all in `.env`; LAN hosts are in `squid/conf/lan.hosts`. `check-env.sh` rejects literal IPs anywhere else.
-- **`as-dns`** (CoreDNS) asks Docker's embedded DNS for `*.as.internal` and keeps one log of every DNS query in `as-net-blind` (`docker compose logs as-dns`).
+- **`as-dns`** (CoreDNS) asks Docker's embedded DNS for `*.as.internal` and keeps one log of every DNS query in `as-net-blind` (`dns/logs/`, also `docker compose logs as-dns`).
   - Any other name gets NXDOMAIN on the spot. Nothing is forwarded out: `as-dns` sits only on the internal network, where Docker forwards no query to an outside resolver (CI-tested), so DNS cannot carry data out (subdomain tunneling).
   - Internet names are resolved by Squid itself, over its VLAN leg (`SQUID_DNS_UPSTREAM`), and only for requests that passed its ACLs.
   - Agents: `fw.sh` writes the sidecar's `/etc/resolv.conf` (`nameserver DNS_IP`, `search as.internal`), which the agent container shares. It allows DNS only to `as-dns` and blocks Docker's embedded DNS (`127.0.0.11`), so every lookup is logged.
@@ -231,7 +231,20 @@ Edit `.env` only (`VLAN_*`, `PROXY_IP`, `INGRESS_IP`, `BLIND_*`, `DNS_IP`, `LLM_
   - Edit your copies, then run `squid/reload_squid.sh` (validates and reloads without restarting the container).
   - When a pull changes an `.example`, `check-env.sh` and `gen-secrets.sh` warn and print the `diff -u` to review. Take over what you want, then `touch` your copy to mark it reviewed.
   - `squid.conf` carries the policy (SSL bump, GitHub and npm write rules): review its changes in particular.
-- Squid logs: `squid/logs/`, rotated daily, 7 files kept. They contain full decrypted URLs.
+- **Access logs** on the host, one directory per service:
+
+  | Service | File | What | Kept |
+  | --- | --- | --- | --- |
+  | `as-squid` | `squid/logs/` | every proxied request, full decrypted URLs | rotated daily, 7 files |
+  | `as-dns` | `dns/logs/queries-<UTC date>.log` | every DNS query with its source, errors | one file a day, 7 days |
+  | `as-ingress` | `ingress/logs/access.log` | every request to the GUIs: client, port, URI, status (JSON; `Authorization` and cookies redacted) | rolled at 10 MiB, rolled files 7 days |
+  | `as-llm-gw` | `llm-gw/logs/access.log` | every request of the agents to LiteLLM, the refused (404) ones included (JSON) | rolled at 10 MiB, rolled files 7 days |
+  | `as-litellm` | `litellm/logs/access.log` | every request to LiteLLM: client, request line, status (`litellm/logging.json`) | rotated at midnight UTC, 7 files |
+  | `as-zenoh` | `zenoh/logs/` | every message on the bus ([Message bus](#message-bus-zenoh)) | never deleted |
+
+  - `as-dns`, `as-ingress` and `as-llm-gw` run as `LOGS_UID`:`LOGS_GID` (default 1000, settable in `.env`), which must own their `logs/` (`start-main.sh` creates them, `check-env.sh` checks the owner). They bind `:53` and `:80` through `net.ipv4.ip_unprivileged_port_start` in their own network namespace. LiteLLM writes as root.
+  - `docker compose logs` still shows the DNS queries and LiteLLM's requests; the Caddy access logs are in the files only.
+  - `as-dns` is built from `dns/` (`dns/Dockerfile`): the CoreDNS binary of `COREDNS_IMAGE` on Alpine, because the official image has no shell and CoreDNS logs to stdout only. `dns/run.sh` copies the stream into the files.
 - Bridge logs: `docker compose logs as-claude-bridge`.
 - **Hermes model:** change it in `hermes/config.yaml` (`model.default`, a `model_name` from `litellm/models/*.yaml`), then `docker compose up -d --force-recreate as-hermes`.
   - The dashboard cannot save model changes ("Failed to save model assignment"): Compose mounts `config.yaml` as a single read-only file. Hermes saves by writing a temporary file and renaming it over the original, which a single-file mount does not allow even read-write.
@@ -250,7 +263,7 @@ Edit `.env` only (`VLAN_*`, `PROXY_IP`, `INGRESS_IP`, `BLIND_*`, `DNS_IP`, `LLM_
 - **Hermes persona:** `hermes/SOUL.md`, mounted read-only at `/opt/data/SOUL.md`, so neither the agent nor the dashboard can rewrite it. Edit it on the host, then `docker compose up -d --force-recreate as-hermes`: an editor that replaces the file leaves the container on the old copy.
   - Keep text of your own in it beyond the image's default persona (the example's "This environment" section). Hermes rewrites an unedited default or an old template in place; on a read-only file that stops it from starting.
   - The persona used before stays in `hermes/data/SOUL.md`, hidden by the mount; `gen-secrets.sh` points at it when it creates `hermes/SOUL.md`.
-- DNS queries (agents, LiteLLM, Open WebUI): `docker compose logs as-dns` (10 × 10 MB kept). A query for an external name from an agent is worth a look.
+- DNS queries (agents, LiteLLM, Open WebUI): `dns/logs/` (7 days) or `docker compose logs as-dns` (10 × 10 MB kept). A query for an external name from an agent is worth a look.
 - Pin versions with `CLAUDE_CODE_VERSION` and the `*_IMAGE` variables in `.env`.
 
 ### Firewall drop logs (`FW_LOG`)
@@ -316,8 +329,10 @@ Known limitations:
   (`%XX`, `\`, `//`, dot segments; `tests/squid/run-acl-tests.sh`). Squid does not see
   response bodies, so a Cloudflare error page that shows the visitor's IP, or any
   allowed service that echoes it, still can.
-- **Squid logs decrypted URLs.** Anyone with access to `squid/logs/` on the host
-  can read them; 7 daily files are kept.
+- **The logs hold what passed.** Squid logs decrypted URLs; the ingress, gateway and
+  LiteLLM access logs hold request URIs with their query strings (not bodies), the DNS
+  log every name looked up, the bus log every message. Anyone with access to these
+  directories on the host can read them.
 - **Default addressing is public space.** `192.19.255.0/24` is not RFC1918; move
   it (see "Changing addressing").
 - **Image tags and `CLAUDE_CODE_VERSION` float** unless you pin them in `.env`.
@@ -363,8 +378,8 @@ Known limitations:
 - **`as-netshoot` reaches everything** in `as-net-blind`, and the sidecars admit it.
   Whoever can `docker exec` already controls every container; the bridge still
   requires `CLAUDE_OAI_KEY`. Nothing can connect to netshoot.
-- **`as-dns` has no healthcheck** (distroless image). It fails closed: without it,
-  sidecars do not report ready and names do not resolve.
+- **`as-dns` has no healthcheck** (a periodic lookup would fill its query log). It fails
+  closed: without it, sidecars do not report ready and names do not resolve.
 - **Not covered by CI:** Open WebUI, a Claude Code login, Hermes talking to a model,
   a real VLAN, IPv6 on containers.
 

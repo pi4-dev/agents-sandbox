@@ -51,6 +51,8 @@ cp .env.example .env
 while IFS= read -r -d '' f; do cp "$f" "${f%.example}"; done < <(find . -name '*.env.example' -print0)
 for f in squid/conf/*.example hermes/config.yaml.example; do cp "$f" "${f%.example}"; done
 mkdir -p zenoh/logs && chown 1000:1000 zenoh/logs   # as-zenoh runs as ZENOH_UID (1000)
+mkdir -p dns/logs ingress/logs llm-gw/logs litellm/logs
+chown 1000:1000 dns/logs ingress/logs llm-gw/logs     # as-dns, as-ingress, as-llm-gw run as LOGS_UID (1000)
 # SQUID_DNS_UPSTREAM: nothing answers there, so an allowed request ends in 503
 # (a denied one is 403 before any lookup)
 sed -i -e "s/^VLAN_PARENT=.*/VLAN_PARENT=$PARENT/" \
@@ -175,6 +177,11 @@ for path in /openapi.json /redoc /health/readiness /.well-known/litellm-ui-confi
 done
 got=$(status as-hermes-net http://litellm.as.internal:4000/v1/models)
 check "Hermes -> LiteLLM directly is dropped (got $got)" test "$got" = 000
+gwlog=$(cat llm-gw/logs/access.log 2>/dev/null || true)
+check "llm-gw/logs/access.log has Hermes' /v1/models (200)" \
+  grep -qE '"uri":"/v1/models".*"status":200' <<<"$gwlog"
+check "llm-gw/logs/access.log has the refused /openapi.json (404)" \
+  grep -qE '"uri":"/openapi.json".*"status":404' <<<"$gwlog"
 
 # --- as-zenoh: the message bus. A Zenoh client (the router's version) runs in the network
 # namespace of a sidecar, so its firewall applies; the passwords are the example values.
@@ -288,11 +295,15 @@ check_not "Claude agent -> netshoot :7777 dropped" sh -c "docker exec as-claude-
 check_not "ping -> netshoot dropped" attacker "ping -c 1 -W 2 netshoot.as.internal"
 check "as-dns logged the agent's lookup" \
   grep -q "$(ipb as-netshoot-net):.*proxy.as.internal" <<<"$(docker logs as-dns 2>&1)"
+check "dns/logs/queries-<date>.log on the host has the agent's lookup" \
+  grep -q "$(ipb as-netshoot-net):.*proxy.as.internal" <<<"$(cat dns/logs/queries-*.log 2>/dev/null || true)"
 
 # --- ingress: the GUIs from the LAN, nothing from inside
 check "LAN -> ingress :8080 -> Open WebUI" grep -q WEBUI-OK <<<"$(lan_get $LAN_IP "http://$INGRESS_IP:8080/")"
 check "LAN outside HERMES_DASHBOARD_ALLOW_FROM -> ingress :9119 -> 403" \
   grep -qx 403 <<<"$(lan_get $LAN_IP "http://$INGRESS_IP:9119/")"
+check "ingress/logs/access.log has the LAN host's refused request (403)" \
+  grep -qE "\"remote_ip\":\"$LAN_IP\".*\"host\":\"$INGRESS_IP:9119\".*\"status\":403" <<<"$(cat ingress/logs/access.log 2>/dev/null || true)"
 check "admin host -> ingress :9119 -> Hermes (sidecar admits as-ingress)" \
   grep -q HERMES-OK <<<"$(lan_get $ADMIN_IP "http://$INGRESS_IP:9119/")"
 # the dashboard: links built from the "# @dashboard" lines of the Caddyfile

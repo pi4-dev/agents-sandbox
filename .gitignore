@@ -26,6 +26,10 @@ zenoh/logs/
 open-webui/data/
 litellm/db/
 squid/logs/
+dns/logs/
+ingress/logs/
+llm-gw/logs/
+litellm/logs/
 **/__pycache__/
 **/.pytest_cache/
 node_modules/

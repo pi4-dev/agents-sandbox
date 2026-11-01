@@ -1,6 +1,7 @@
 # as-ingress: the GUIs of as-net-blind on the VLAN (INGRESS_IP), one port per GUI.
 # Caddy listens only on its VLAN leg and resolves the services by their
-# *.as.internal names. Access log: docker compose logs as-ingress.
+# *.as.internal names. Access log (JSON, Authorization and cookies redacted):
+# ingress/logs/access.log, rolled at 10 MiB, rolled files deleted after 7 days.
 #
 # A site preceded by a marker line is listed on the dashboard (:80):
 #   # @dashboard <name> | <description> | <path>      (description and path optional)
@@ -13,7 +14,14 @@
 
 (common) {
 	bind {$INGRESS_IP}
-	log
+	log {
+		output file /var/log/caddy/access.log {
+			roll_size 10MiB
+			roll_uncompressed
+			roll_keep 100
+			roll_keep_for 7d
+		}
+	}
 }
 
 # Open WebUI (its own login)

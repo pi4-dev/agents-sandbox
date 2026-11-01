@@ -256,6 +256,18 @@ if [ $mode = local ]; then
   fi
 fi
 
+# --- access logs: as-dns, as-ingress and as-llm-gw run as LOGS_UID and write into these ---
+if [ $mode = local ]; then
+  luid=$(get .env LOGS_UID 2>/dev/null || true); luid=${luid:-1000}
+  for d in dns/logs ingress/logs llm-gw/logs litellm/logs; do
+    if [ ! -d "$d" ]; then
+      echo "check-env: warning: $d is missing; Docker would create it as root (start-main.sh creates it)" >&2
+    elif [ "$d" != litellm/logs ] && [ "$(stat -c %u "$d")" != "$luid" ]; then
+      echo "check-env: warning: $d is not owned by UID $luid (LOGS_UID), so its container cannot write the access log. Fix: sudo chown $luid $d" >&2
+    fi
+  done
+fi
+
 # --- dns/local.d: a forward to anything but Docker's DNS reopens DNS as a way out ---
 for f in dns/local.d/*.conf; do
   [ -f "$f" ] || continue

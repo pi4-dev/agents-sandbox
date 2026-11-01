@@ -1,0 +1,4 @@
+# build context: Dockerfile and run.sh only
+*
+!Dockerfile
+!run.sh
