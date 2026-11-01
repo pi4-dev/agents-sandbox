@@ -266,9 +266,13 @@ check(re.search(r'access_control:\s*\{\s*enabled:\s*true,\s*default_permission:\
       and re.search(r'usrpwd:\s*\{\s*dictionary_file:', zen_code),
       "as-zenoh: logins required, ACL default deny")
 hermes_mounts_ca = {v["target"]: v for v in svc["as-hermes"].get("volumes", [])}
-check(env["as-hermes"].get("PIP_CERT") == "/certs/proxy-ca.crt"
-      and hermes_mounts_ca.get("/certs/proxy-ca.crt", {}).get("source", "").endswith("ssl/squid-ca.crt"),
-      "as-hermes: pip trusts the proxy CA (PyPI through Squid)")
+ca_hook = hermes_mounts_ca.get("/etc/cont-init.d/00-proxy-ca", {})
+check(hermes_mounts_ca.get("/usr/local/share/ca-certificates/proxy-ca.crt", {}).get("source", "").endswith("ssl/squid-ca.crt")
+      and ca_hook.get("source", "").endswith("/hermes/ca-trust.sh") and ca_hook.get("read_only") is True,
+      "as-hermes: the proxy CA joins the system store at start (s6 cont-init hook)")
+check(env["as-hermes"].get("SSL_CERT_FILE") == env["as-hermes"].get("REQUESTS_CA_BUNDLE") == "/etc/ssl/certs/ca-certificates.crt"
+      and env["as-hermes"].get("NODE_EXTRA_CA_CERTS") == "/usr/local/share/ca-certificates/proxy-ca.crt",
+      "as-hermes: certifi, OpenSSL and Node point at a bundle with the proxy CA")
 check(svc["as-hermes"].get("depends_on", {}).get("as-llm-gw") is not None, "as-hermes: starts after as-llm-gw")
 check(re.search(r'(?m)^\s*api:\s*"?http://llm\.as\.internal:4000/v1"?\s*$', open("hermes/config.yaml.example").read()),
       "hermes/config.yaml: LiteLLM through as-llm-gw")

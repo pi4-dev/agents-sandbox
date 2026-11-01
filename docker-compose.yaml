@@ -115,7 +115,10 @@ services:
         read_only: true
         bind:
           create_host_path: false
-      - ./ssl/squid-ca.crt:/certs/proxy-ca.crt:ro
+      # Squid bumps all TLS: its CA joins the system store at every start, by an s6 hook
+      # that runs as root before Hermes (hermes/ca-trust.sh)
+      - ./ssl/squid-ca.crt:/usr/local/share/ca-certificates/proxy-ca.crt:ro
+      - ./hermes/ca-trust.sh:/etc/cont-init.d/00-proxy-ca:ro
 
     network_mode: service:as-hermes-net
 
@@ -127,8 +130,11 @@ services:
       ZENOH_CONNECT: tcp/zenoh.as.internal:7447
       ZENOH_USER: hermes
       ZENOH_VERSION: ${ZENOH_VERSION:-1.10.2}    # the client to install: pip install eclipse-zenoh==$ZENOH_VERSION
-      # pip through Squid (PyPI is allowlisted): the proxy CA for pip only
-      PIP_CERT: /certs/proxy-ca.crt
+      # libraries with their own CA bundle: the system one, which has the proxy CA
+      # (Python requests/httpx via certifi, OpenSSL defaults); Node adds the CA to its own
+      SSL_CERT_FILE: /etc/ssl/certs/ca-certificates.crt
+      REQUESTS_CA_BUNDLE: /etc/ssl/certs/ca-certificates.crt
+      NODE_EXTRA_CA_CERTS: /usr/local/share/ca-certificates/proxy-ca.crt
 
     shm_size: "1g"
 
