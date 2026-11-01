@@ -352,6 +352,9 @@ check(fh.get("class") == "logging.handlers.TimedRotatingFileHandler" and fh.get(
       and fh.get("when") == "midnight" and fh.get("backupCount") == 7
       and "access_file" in lc.get("loggers", {}).get("uvicorn.access", {}).get("handlers", []),
       "litellm/logging.json: uvicorn access log to /var/log/litellm/access.log, daily, 7 kept")
+hc = " ".join(svc["as-litellm"].get("healthcheck", {}).get("test", []))
+check(env["as-litellm"].get("LITELLM_DISABLE_ACCESS_LOG_PATHS") == "/health/liveliness" and "/health/liveliness" in hc,
+      "as-litellm: the healthcheck's /health/liveliness stays out of the access log")
 cmd = svc["as-litellm"].get("command", [])
 check("--log_config" in cmd and cmd[cmd.index("--log_config") + 1] == "/app/logging.json"
       and {v["target"]: v for v in svc["as-litellm"]["volumes"]}.get("/app/logging.json", {}).get("read_only") is True,

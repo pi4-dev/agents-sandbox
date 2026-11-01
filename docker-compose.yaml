@@ -180,6 +180,8 @@ services:
       HTTPS_PROXY: *litellm-proxy
       http_proxy: *litellm-proxy
       https_proxy: *litellm-proxy
+      # the healthcheck's path stays out of the access log (litellm/logs, docker logs)
+      LITELLM_DISABLE_ACCESS_LOG_PATHS: /health/liveliness
     # Docker's embedded DNS answers the aliases of LiteLLM's networks (as-litellm-db,
     # llm-proxy.as.internal, ...) and sends the rest to as-dns
     dns: ["${DNS_IP}"]

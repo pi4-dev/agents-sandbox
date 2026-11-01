@@ -46,7 +46,7 @@ for _ in $(seq 1 60); do docker exec "$P-db" pg_isready -U litellm >/dev/null 2>
 mkdir "$W/llog"   # the access log, as litellm/logs in the stack (litellm/logging.json)
 docker run -d --name "$P-app" --network "$P" --network-alias as-litellm -p "127.0.0.1:$PORT:4000" \
   -e LITELLM_LOG="${LITELLM_TEST_LOG:-INFO}" -e LITELLM_MASTER_KEY="$MASTER" -e LITELLM_SALT_KEY="$(openssl rand -hex 32)" \
-  -e DATABASE_URL=postgresql://litellm:pw@"$P-db":5432/litellm \
+  -e DATABASE_URL=postgresql://litellm:pw@"$P-db":5432/litellm -e LITELLM_DISABLE_ACCESS_LOG_PATHS=/health/liveliness \
   -v "$W/config.yaml:/app/config.yaml:ro" -v "$REPO/litellm/logging.json:/app/logging.json:ro" -v "$W/llog:/var/log/litellm" \
   "$LITELLM" --config /app/config.yaml --port 4000 --log_config /app/logging.json >/dev/null
 for _ in $(seq 1 120); do
@@ -170,6 +170,8 @@ done
 llog=$(cat "$W/llog/access.log" 2>/dev/null || true)
 expect "access log: the clients' /v1/models (200)" "$(grep -c '"GET /v1/models HTTP/1.1" 200' <<<"$llog" | awk '{print ($1 > 0) ? "yes" : "no"}')" yes
 expect "access log: the revoked key's /v1/models (401)" "$(grep -c '"GET /v1/models HTTP/1.1" 401' <<<"$llog" | awk '{print ($1 > 0) ? "yes" : "no"}')" yes
+# the start-up wait above polled /health/liveliness, the stack's healthcheck path
+expect "access log: no /health/liveliness (the healthcheck's path)" "$(grep -c '/health/liveliness' <<<"$llog")" 0
 
 for bad in CHANGE_ME_LITELLM_KEY_HERMES sk-short "$MASTER"; do
   if job "$bad" "$OK" >/dev/null; then result FAIL "invalid Hermes key is rejected"

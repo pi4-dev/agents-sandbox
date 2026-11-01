@@ -239,11 +239,12 @@ Edit `.env` only (`VLAN_*`, `PROXY_IP`, `INGRESS_IP`, `BLIND_*`, `DNS_IP`, `LLM_
   | `as-dns` | `dns/logs/queries-<UTC date>.log` | every DNS query with its source, errors | one file a day, 7 days |
   | `as-ingress` | `ingress/logs/access.log` | every request to the GUIs: client, port, URI, status (JSON; `Authorization` and cookies redacted) | rolled at 10 MiB, rolled files 7 days |
   | `as-llm-gw` | `llm-gw/logs/access.log` | every request of the agents to LiteLLM, the refused (404) ones included (JSON) | rolled at 10 MiB, rolled files 7 days |
-  | `as-litellm` | `litellm/logs/access.log` | every request to LiteLLM: client, request line, status (`litellm/logging.json`) | rotated at midnight UTC, 7 files |
+  | `as-litellm` | `litellm/logs/access.log` | every request to LiteLLM: client, request line, status (`litellm/logging.json`), except the healthcheck's `/health/liveliness` (`LITELLM_DISABLE_ACCESS_LOG_PATHS`) | rotated at midnight UTC, 7 files |
   | `as-zenoh` | `zenoh/logs/` | every message on the bus ([Message bus](#message-bus-zenoh)) | never deleted |
 
   - `as-dns`, `as-ingress` and `as-llm-gw` run as `LOGS_UID`:`LOGS_GID` (default 1000, settable in `.env`), which must own their `logs/` (`start-main.sh` creates them, `check-env.sh` checks the owner). They bind `:53` and `:80` through `net.ipv4.ip_unprivileged_port_start` in their own network namespace. LiteLLM writes as root.
   - `docker compose logs` still shows the DNS queries and LiteLLM's requests; the Caddy access logs are in the files only.
+  - Healthchecks stay out of the access logs: LiteLLM's is the only one that makes a request there (Squid's runs `squid -k check`, `as-zenoh`'s checks its processes; `as-dns`, `as-ingress` and `as-llm-gw` have none).
   - `as-dns` is built from `dns/` (`dns/Dockerfile`): the CoreDNS binary of `COREDNS_IMAGE` on Alpine, because the official image has no shell and CoreDNS logs to stdout only. `dns/run.sh` copies the stream into the files.
 - Bridge logs: `docker compose logs as-claude-bridge`.
 - **Hermes model:** change it in `hermes/config.yaml` (`model.default`, a `model_name` from `litellm/models/*.yaml`), then `docker compose up -d --force-recreate as-hermes`.
