@@ -30,6 +30,7 @@ x-claude-image: &claude-image
       ssl: ./ssl
     args:
       CLAUDE_CODE_VERSION: ${CLAUDE_CODE_VERSION:-latest}
+      ZENOH_VERSION: ${ZENOH_VERSION:-1.10.2}     # the bus client in /opt/zenoh, as as-zenoh
   # the proxy CA is baked in: build on every `up` (cached, quick) so a new CA reaches it
   image: agents-sandbox/claude
   pull_policy: build
@@ -61,9 +62,10 @@ services:
       ALLOW_IN: >-
         tcp:9119:ingress.as.internal
         any::netshoot.as.internal
-      # LiteLLM only through as-llm-gw (client routes, no upstream headers)
+      # LiteLLM only through as-llm-gw (client routes, no upstream headers); the message bus
       ALLOW_OUT: >-
         tcp:llm.as.internal:4000
+        tcp:zenoh.as.internal:7447
     volumes:
       - ./fw/fw.sh:/fw.sh:ro
     networks:
@@ -113,12 +115,20 @@ services:
         read_only: true
         bind:
           create_host_path: false
+      - ./ssl/squid-ca.crt:/certs/proxy-ca.crt:ro
 
     network_mode: service:as-hermes-net
 
     env_file:
       - proxy.env
       - hermes/hermes.env
+    environment:
+      # message bus (as-zenoh); the password is ZENOH_PASSWORD_HERMES in hermes/hermes.env
+      ZENOH_CONNECT: tcp/zenoh.as.internal:7447
+      ZENOH_USER: hermes
+      ZENOH_VERSION: ${ZENOH_VERSION:-1.10.2}    # the client to install: pip install eclipse-zenoh==$ZENOH_VERSION
+      # pip through Squid (PyPI is allowlisted): the proxy CA for pip only
+      PIP_CERT: /certs/proxy-ca.crt
 
     shm_size: "1g"
 
@@ -235,6 +245,41 @@ services:
     cap_drop: [ALL]
     cap_add: [NET_BIND_SERVICE]      # the image's caddy binary carries this file capability
     security_opt: ["no-new-privileges:true"]
+    logging: *bounded-logs
+
+# - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+  # Message bus of the agents (zenoh.as.internal:7447): a login per system, an ACL that
+  # lets each publish only under as/<name>/**, and every put and delete written to
+  # zenoh/logs/ on the host (zenoh/conf/zenoh.json5, zenoh/conf/run.sh).
+  as-zenoh:
+    image: eclipse/zenoh:${ZENOH_VERSION:-1.10.2}
+    container_name: as-zenoh
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "/etc/zenoh/run.sh"]
+    env_file:
+      - zenoh/zenoh.env                 # ZENOH_PASSWORD_<NAME>: one login per system
+    user: "${ZENOH_UID:-1000}:${ZENOH_GID:-1000}"   # owner of zenoh/logs on the host
+    volumes:
+      - ./zenoh/conf:/etc/zenoh:ro      # zenoh.json5 (router, logins, ACL), run.sh
+      - ./zenoh/logs:/log               # messages-<UTC date>.jsonl, never deleted
+    tmpfs: [/tmp]                       # the login dictionary
+    dns: ["${DNS_IP}"]
+    depends_on:
+      as-dns: { condition: service_started }
+    networks:
+      as-net-blind:
+        aliases: [zenoh.as.internal]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    healthcheck:
+      test: ["CMD-SHELL", "pidof zenohd >/dev/null && pidof wget >/dev/null"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+      start_interval: 2s
     logging: *bounded-logs
 
 # - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -368,6 +413,8 @@ services:
       <<: *fw-env
       ALLOW_IN: >-
         any::netshoot.as.internal
+      ALLOW_OUT: >-
+        tcp:zenoh.as.internal:7447
       FW_LOG: 1
     volumes:
       - ./fw/fw.sh:/fw.sh:ro
@@ -388,6 +435,10 @@ services:
     env_file:
       - proxy.env
       - claude-main/claude.env
+    environment:
+      # message bus (as-zenoh); the password is ZENOH_PASSWORD_CLAUDE in claude-main/claude.env
+      ZENOH_CONNECT: tcp/zenoh.as.internal:7447
+      ZENOH_USER: claude
     volumes:
       - ./claude-main/data/workspace:/workspace
       - ./claude-main/data/claude-home:/home/node        # login and settings survive restarts

@@ -31,7 +31,7 @@ BADCERT_IP=127.0.0.3       # upstream with a certificate Squid does not trust
 NAMES=(api.anthropic.com claude.ai claude.com platform.claude.com statsig.anthropic.com
        code.claude.com github.com api.github.com raw.githubusercontent.com
        objects.githubusercontent.com ftp.pl.debian.org security.debian.org evil.example.com
-       openrouter.ai llm.lan.internal)
+       openrouter.ai llm.lan.internal pypi.org files.pythonhosted.org upload.pypi.org)
 
 [ "$(id -u)" = 0 ] || { echo "run-acl-tests: run as root" >&2; exit 2; }
 
@@ -171,6 +171,11 @@ check allow "npm audit POST (npm install)"         POST   https://registry.npmjs
 check deny  "npm publish (PUT)"                    PUT    https://registry.npmjs.org/some-pkg
 check deny  "npm unpublish (DELETE)"               DELETE https://registry.npmjs.org/some-pkg/-rev/1-abc
 check deny  "npm login (POST)"                     POST   https://registry.npmjs.org/-/v1/login
+check allow "PyPI index (pip install)"             GET    https://pypi.org/simple/eclipse-zenoh/
+check allow "PyPI files (pip install)"             GET    https://files.pythonhosted.org/packages/ab/cd/eclipse_zenoh.whl
+check deny  "PyPI POST"                            POST   https://pypi.org/account/login/
+check deny  "PyPI files PUT"                       PUT    https://files.pythonhosted.org/packages/x
+check deny  "PyPI upload (upload.pypi.org)"        POST   https://upload.pypi.org/legacy/
 check deny  "domain not on allowlist (https)"      GET    https://evil.example.com/
 check deny  "domain not on allowlist (http)"       GET    http://evil.example.com/
 check deny  "Host header differs from CONNECT"     GET    https://api.anthropic.com/ -H "Host: evil.example.com"

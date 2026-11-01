@@ -84,7 +84,7 @@ for name, s in svc.items():
 want_aliases = {
     "as-dns": "dns", "as-squid": "proxy", "as-litellm": "litellm", "as-open-webui": "open-webui",
     "as-hermes-net": "hermes", "as-netshoot-net": "netshoot", "as-ingress": "ingress",
-    "as-claude-net": "claude dev-ws01", "as-claude-bridge-net": "claude-bridge", "as-llm-gw": "llm",
+    "as-claude-net": "claude dev-ws01", "as-claude-bridge-net": "claude-bridge", "as-llm-gw": "llm", "as-zenoh": "zenoh",
 }
 for name, want in want_aliases.items():
     for a in want.split():
@@ -216,13 +216,59 @@ check(squid_mounts.get("/etc/squid/conf", {}).get("read_only") is True,
 check(all(not t.startswith("/etc/squid/conf/") for t in squid_mounts),
       "as-squid: no single-file mounts inside /etc/squid/conf")
 
-for name in ["as-litellm", "as-open-webui", "as-ingress", "as-llm-gw"]:
+for name in ["as-litellm", "as-open-webui", "as-ingress", "as-llm-gw", "as-zenoh"]:
     check(svc[name].get("dns") == [dns_ip], f"{name}: unknown names go to as-dns")
 check("dns" not in svc["as-squid"] and env["as-squid"].get("SQUID_DNS_UPSTREAM"),
       "as-squid: resolves internet names itself (SQUID_DNS_UPSTREAM)")
 # --- as-llm-gw: the agents' way to LiteLLM ---
-check(env["as-hermes-net"].get("ALLOW_OUT") == "tcp:llm.as.internal:4000",
-      "as-hermes-net: out only to as-llm-gw, not to LiteLLM directly")
+check(env["as-hermes-net"].get("ALLOW_OUT") == "tcp:llm.as.internal:4000 tcp:zenoh.as.internal:7447",
+      "as-hermes-net: out only to as-llm-gw (not LiteLLM directly) and the message bus")
+
+# --- as-zenoh: the message bus, a login and an ACL per system, every message logged ---
+check(env["as-claude-net"].get("ALLOW_OUT") == "tcp:zenoh.as.internal:7447", "as-claude-net: out to the message bus only")
+check("zenoh" not in str(env["as-claude-bridge-net"].get("ALLOW_OUT", "")), "as-claude-bridge-net: not on the message bus")
+zen = svc["as-zenoh"]
+check(list(zen.get("networks", {})) == ["as-net-blind"], "as-zenoh: only on as-net-blind")
+check(zen.get("read_only") is True and zen.get("cap_drop") == ["ALL"] and not zen.get("cap_add")
+      and "no-new-privileges:true" in (zen.get("security_opt") or []),
+      "as-zenoh: read-only, no capabilities, no-new-privileges")
+check(str(zen.get("user", "0")).split(":")[0] not in ("", "0", "root"), f"as-zenoh: not root ({zen.get('user')})")
+zen_mounts = {v["target"]: v for v in zen.get("volumes", [])}
+check(zen_mounts.get("/etc/zenoh", {}).get("read_only") is True and zen_mounts["/etc/zenoh"]["source"].endswith("/zenoh/conf"),
+      "as-zenoh: zenoh/conf mounted read-only")
+check(zen_mounts.get("/log", {}).get("source", "").endswith("/zenoh/logs") and not zen_mounts["/log"].get("read_only"),
+      "as-zenoh: writes the message log to zenoh/logs on the host")
+check("healthcheck" in zen, "as-zenoh: has a healthcheck")
+zver = zen.get("image", "").rpartition(":")[2]
+check(re.fullmatch(r"\d+\.\d+\.\d+", zver) is not None, f"as-zenoh: image pinned to a release ({zen.get('image')})")
+check(svc["as-claude-main"].get("build", {}).get("args", {}).get("ZENOH_VERSION") == zver
+      and env["as-hermes"].get("ZENOH_VERSION") == zver, "agents get the router's client version")
+zen_users = sorted(k[len("ZENOH_PASSWORD_"):].lower() for k in env["as-zenoh"] if k.startswith("ZENOH_PASSWORD_"))
+zen_cfg = open("zenoh/conf/zenoh.json5").read()
+zen_code = "\n".join(l for l in zen_cfg.splitlines() if not l.lstrip().startswith("//"))
+acl_users = sorted(re.findall(r'usernames:\s*\["([^"]+)"\]', zen_code))
+check(zen_users and zen_users == acl_users, f"as-zenoh: a login for each ACL subject {zen_users}")
+for agent, user in [("as-hermes", "hermes"), ("as-claude-main", "claude")]:
+    e = env[agent]
+    check(e.get("ZENOH_USER") == user and e.get("ZENOH_CONNECT") == "tcp/zenoh.as.internal:7447"
+          and f"ZENOH_PASSWORD_{user.upper()}" in e, f"{agent}: logs in to the bus as {user}")
+for user in acl_users:
+    own = re.search(r'id:\s*"own-' + user + r'"(.*?)\}', zen_code, re.S)
+    check(own and re.search(r'key_exprs:\s*\["as/' + user + r'/\*\*"\]', own.group(1))
+          and re.search(r'flows:\s*\["ingress"\]', own.group(1)),
+          f"as-zenoh: {user} publishes only under as/{user}/**")
+check(re.search(r'listen:\s*\{\s*endpoints:\s*\["tcp/0\.0\.0\.0:7447"\]', zen_code)
+      and re.search(r'multicast:\s*\{\s*enabled:\s*false', zen_code),
+      "as-zenoh: listens on tcp/7447 (IPv4), no multicast scouting")
+check(re.search(r'rest:\s*\{\s*http_port:\s*"127\.0\.0\.1:8000"', zen_code),
+      "as-zenoh: REST (the log's subscriber, no login, no ACL) on 127.0.0.1 only")
+check(re.search(r'access_control:\s*\{\s*enabled:\s*true,\s*default_permission:\s*"deny"', zen_code)
+      and re.search(r'usrpwd:\s*\{\s*dictionary_file:', zen_code),
+      "as-zenoh: logins required, ACL default deny")
+hermes_mounts_ca = {v["target"]: v for v in svc["as-hermes"].get("volumes", [])}
+check(env["as-hermes"].get("PIP_CERT") == "/certs/proxy-ca.crt"
+      and hermes_mounts_ca.get("/certs/proxy-ca.crt", {}).get("source", "").endswith("ssl/squid-ca.crt"),
+      "as-hermes: pip trusts the proxy CA (PyPI through Squid)")
 check(svc["as-hermes"].get("depends_on", {}).get("as-llm-gw") is not None, "as-hermes: starts after as-llm-gw")
 check(re.search(r'(?m)^\s*api:\s*"?http://llm\.as\.internal:4000/v1"?\s*$', open("hermes/config.yaml.example").read()),
       "hermes/config.yaml: LiteLLM through as-llm-gw")

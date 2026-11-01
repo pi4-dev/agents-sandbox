@@ -11,3 +11,8 @@ code.claude.com
 # optional
 registry.npmjs.org
 
+# PyPI, read-only (squid.conf): the message bus client (pip install eclipse-zenoh).
+# Uploads go to upload.pypi.org, which is not listed.
+pypi.org
+files.pythonhosted.org
+

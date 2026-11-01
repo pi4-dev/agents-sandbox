@@ -62,6 +62,9 @@ acl git_fetch     urlpath_regex -i /git-upload-pack$
 acl npm_registry  dstdomain -n registry.npmjs.org
 acl npm_audit     urlpath_regex ^/-/npm/v1/security/
 
+# PyPI is read-only too (pip only reads; uploads go to upload.pypi.org, not allowlisted)
+acl pypi          dstdomain -n pypi.org files.pythonhosted.org
+
 # --- Access control ---
 # CONNECT is let in only to set up the tunnel and bump it.
 # The actual decision is made on the DECRYPTED request (the !CONNECT rules),
@@ -81,6 +84,7 @@ http_access deny  denied_urls
 http_access deny  localnet api_github   write_methods
 http_access deny  localnet github_web   write_methods !git_fetch
 http_access deny  localnet npm_registry write_methods !npm_audit
+http_access deny  localnet pypi         write_methods
 http_access allow localnet !CONNECT full_domains
 http_access allow localnet !CONNECT path_domains allowed_urls
 http_access allow litellm_leg litellm_src !CONNECT llm_api

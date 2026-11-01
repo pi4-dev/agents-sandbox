@@ -1,5 +1,5 @@
 <!-- agents-sandbox topology. Source of truth: docker-compose.yaml; keep in sync with docs/NETWORK.md. -->
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 900" aria-label="Topology: router/firewall, as-net-vlan with as-ingress and as-squid, as-net-blind with agents behind firewall sidecars, LiteLLM, the agents' gateway as-llm-gw, Open WebUI and as-dns, as-net-litellm-egress between LiteLLM and Squid, as-net-litellm-db with the database">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 900" aria-label="Topology: router/firewall, as-net-vlan with as-ingress and as-squid, as-net-blind with agents behind firewall sidecars, LiteLLM, the agents' gateway as-llm-gw, the message bus as-zenoh, Open WebUI and as-dns, as-net-litellm-egress between LiteLLM and Squid, as-net-litellm-db with the database">
         <title>agents-sandbox topology</title>
         <style>
 svg {
@@ -194,6 +194,11 @@ text { font-family: var(--f-body); fill: var(--fg); }
         <text class="t-mono" x="340" y="650">every container asks as-dns :53;</text>
         <text class="t-mono" x="340" y="668">sidecars block 127.0.0.11 and</text>
         <text class="t-mono" x="340" y="686">re-resolve peer names (fw.sh)</text>
+
+        <!-- message bus: hermes and claude-main log in (ALLOW_OUT :7447), every message logged on the host -->
+        <rect class="gw" x="340" y="698" width="330" height="40" rx="6"/>
+        <text class="t-title" x="352" y="716" style="font-size:13px">as-zenoh · zenoh.as.internal:7447</text>
+        <text class="t-mono" x="352" y="731">hermes ↔ claude-main · login, ACL · log → host</text>
         <text class="t-mono" x="48" y="752">sidecar fw.sh: default DROP, named ALLOW_IN/ALLOW_OUT, anti-spoofing, IPv6 fail-closed</text>
 
         <!-- DB network -->

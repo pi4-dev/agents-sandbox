@@ -10,7 +10,7 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-SERVICE_ENVS=(claude-main/claude claude-bridge/claude-bridge hermes/hermes litellm/litellm litellm/litellm-db open-webui/open-webui)
+SERVICE_ENVS=(claude-main/claude claude-bridge/claude-bridge hermes/hermes litellm/litellm litellm/litellm-db open-webui/open-webui zenoh/zenoh)
 
 if [ "${1:-}" = --examples ]; then mode=examples sfx=.example; else mode=local sfx=; fi
 fail=0
@@ -230,6 +230,32 @@ if [ $mode = local ]; then
   done
 fi
 
+# --- message bus: each system's password equals its login in zenoh.env, every login has an ACL ---
+ze=zenoh/zenoh.env$sfx
+if [ -f "$ze" ]; then
+  for pair in "hermes/hermes.env$sfx ZENOH_PASSWORD_HERMES" "claude-main/claude.env$sfx ZENOH_PASSWORD_CLAUDE"; do
+    read -r f k <<<"$pair"
+    if [ -f "$f" ] && [ "$(get "$f" "$k")" != "$(get "$ze" "$k")" ]; then
+      err "$k differs between $f and $ze (the system logs in to as-zenoh with it)"
+    fi
+  done
+  logins=$(sed -nE 's/^[[:space:]]*ZENOH_PASSWORD_([A-Z0-9_]+)[[:space:]]*=.*/\1/p' "$ze" | tr '[:upper:]' '[:lower:]' | sort -u)
+  acl=$(grep -vE '^[[:space:]]*//' zenoh/conf/zenoh.json5 | grep -oE 'usernames:[[:space:]]*\[[^]]*\]' |
+        grep -oE '"[^"]+"' | tr -d '"' | sort -u)
+  if [ "$logins" != "$acl" ]; then
+    msg="logins in $ze ($(tr '\n' ' ' <<<"$logins")) and ACL subjects in zenoh/conf/zenoh.json5 ($(tr '\n' ' ' <<<"$acl")) differ"
+    if [ $mode = examples ]; then err "$msg"; else echo "check-env: warning: $msg" >&2; fi
+  fi
+fi
+if [ $mode = local ]; then
+  zuid=$(get .env ZENOH_UID 2>/dev/null || true); zuid=${zuid:-1000}
+  if [ ! -d zenoh/logs ]; then
+    echo "check-env: warning: zenoh/logs is missing; Docker would create it as root and as-zenoh (UID $zuid) could not log (start-main.sh creates it)" >&2
+  elif [ "$(stat -c %u zenoh/logs)" != "$zuid" ]; then
+    echo "check-env: warning: zenoh/logs is not owned by UID $zuid (ZENOH_UID), so as-zenoh cannot write the message log. Fix: sudo chown $zuid zenoh/logs" >&2
+  fi
+fi
+
 # --- dns/local.d: a forward to anything but Docker's DNS reopens DNS as a way out ---
 for f in dns/local.d/*.conf; do
   [ -f "$f" ] || continue
@@ -240,7 +266,7 @@ done
 
 # --- addresses live only in .env and squid/conf/lan.hosts; everything else uses names ---
 ipv4='([0-9]{1,3}\.){3}[0-9]{1,3}'
-for f in "${present[@]}" proxy.env docker-compose.yaml compose.hermes-privileged.yaml hermes/config.yaml* hermes/managed.env* \
+for f in "${present[@]}" proxy.env docker-compose.yaml compose.hermes-privileged.yaml hermes/config.yaml* hermes/managed.env* zenoh/conf/* \
          litellm/litellm-config.yaml litellm/models/*.yaml dns/Corefile ingress/Caddyfile ingress/dashboard.html squid/conf/* \
          claude-main/policy/*; do
   [ -f "$f" ] || continue

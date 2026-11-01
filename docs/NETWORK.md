@@ -25,7 +25,7 @@ Drawing: [topology.svg](topology.svg) (amber frames are the `fw.sh` sidecars).
                        │   │  as-net-vlan (macvlan):  .101 as-squid          .99 as-ingress      │
                        │   │                               │ no routing          │ no routing    │
                        │   │  as-net-blind (internal):  proxy.as.internal   ingress.as.internal  │
-                       │   │     as-dns (DNS_IP)  as-litellm  as-llm-gw  as-open-webui           │
+                       │   │     as-dns (DNS_IP)  as-litellm  as-llm-gw  as-open-webui  as-zenoh │
                        │   │     as-claude-net (+ claude-main)  as-claude-bridge-net (+ bridge)  │
                        │   │     as-hermes-net (+ hermes)  as-netshoot-net                       │
                        │   │  as-net-litellm-egress (internal): as-litellm <-> as-squid          │
@@ -57,7 +57,7 @@ Drawing: [topology.svg](topology.svg) (amber frames are the `fw.sh` sidecars).
 - **The router sees** only the two VLAN legs: Squid's egress, the GUI traffic
   to `as-ingress`, and LAN clients of the proxy (`SQUID_LOCALNET_EXTRA`).
 - **The router does not see** anything inside `as-net-blind` (agent → Squid, agent →
-  `as-dns`, Hermes → `as-llm-gw` → LiteLLM, LiteLLM → bridge). That traffic never leaves the Docker host. The
+  `as-dns`, Hermes → `as-llm-gw` → LiteLLM, agents ↔ `as-zenoh`, LiteLLM → bridge). That traffic never leaves the Docker host. The
   `fw.sh` sidecars (agents) enforce it.
 
 So the router has three jobs:

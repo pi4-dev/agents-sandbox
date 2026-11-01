@@ -17,6 +17,7 @@ Docker Compose homelab for AI coding agents with a shared LiteLLM API, an HTTPS-
 | `as-dns` | Internal DNS (CoreDNS): only `*.as.internal`, no recursion, every query logged |
 | `as-litellm` | Shared API routing to LLM models |
 | `as-litellm-keys` | One-shot job: registers the pre-generated client keys in LiteLLM |
+| `as-zenoh` | Message bus of the agents (Zenoh router, `zenoh.as.internal:7447`): a login and an ACL per system, every message logged to `zenoh/logs/` on the host |
 | `as-llm-gw` | The agents' way to LiteLLM (Caddy, `llm.as.internal:4000`): only the client-key routes, without the response headers that describe the upstream |
 | `as-litellm-db` | PostgreSQL on a Docker `internal` network |
 | `as-open-webui` | Web UI for models |
@@ -39,6 +40,7 @@ hermes/                        Hermes configuration (config.yaml.example), manag
 fw/                            Network namespace firewall rules (fw.sh)
 litellm/                       LiteLLM model/database configuration
 llm-gw/                        as-llm-gw config (Caddyfile): the agents' routes to LiteLLM
+zenoh/                         as-zenoh: router config and start script (conf/), logins (zenoh.env.example), message log (logs/)
 open-webui/                    Web UI environment example
 squid/                         Proxy image, entrypoint, error pages
 squid/conf/                    squid.conf, the allow/deny lists and LAN hosts: tracked as *.example, your copies beside them
@@ -58,7 +60,7 @@ In short:
  LAN ──► as-ingress :80 :8080 :4000 :9119 ───────┐          ┌── as-squid ──► internet (allowlist)
          (VLAN leg, INGRESS_IP)                  │          │   (VLAN leg, PROXY_IP)
                                                  ▼          │
-   as-net-blind (internal, no route out):  open-webui  litellm  llm-gw  hermes  claude  claude-bridge  netshoot  as-dns
+   as-net-blind (internal, no route out):  open-webui  litellm  llm-gw  zenoh  hermes  claude  claude-bridge  netshoot  as-dns
                                                     │       (hermes ──► llm-gw ──► litellm)
                                    as-net-litellm-egress (internal): LiteLLM <-> Squid only
 ```
@@ -73,7 +75,7 @@ In short:
 - **LiteLLM reaches Squid over its own network** (`as-net-litellm-egress`, `llm-proxy.as.internal`). Squid serves the LLM provider APIs (`llm_api_domains.txt`) and LAN hosts (`lan.hosts`) only on that leg, so the identity is network membership, not an address an agent could forge.
 - **Dashboard** at `http://<INGRESS_IP>/` (`:80`, only from `INGRESS_DASHBOARD_ALLOW_FROM`): links to every published GUI, with a dot showing whether your browser reaches its port. Caddy builds the list on each request from the `# @dashboard <name> | <description> | <path>` lines in `ingress/Caddyfile`, so a new site with such a line shows up after `docker compose restart as-ingress`. Every path serves the dashboard; the Caddyfile itself is not served.
 - **GUIs through `as-ingress`** on `INGRESS_IP`, one port per GUI: Open WebUI `:8080`, LiteLLM `:4000` (API and `/ui`), Hermes dashboard `:9119` (only from `HERMES_DASHBOARD_ALLOW_FROM`). Caddy listens on its VLAN leg only.
-- **Names, not addresses.** Every service is reached by a `*.as.internal` name (`proxy`, `litellm`, `llm`, `claude-bridge`, `hermes`, `open-webui`, `netshoot`, `dns`, `ingress`, `dev-ws01`). They are Docker network aliases in `docker-compose.yaml`, and Docker assigns the addresses (`BLIND_IP_RANGE`). Fixed addresses are only the VLAN legs (`PROXY_IP`, `INGRESS_IP`) and `DNS_IP`, all in `.env`; LAN hosts are in `squid/conf/lan.hosts`. `check-env.sh` rejects literal IPs anywhere else.
+- **Names, not addresses.** Every service is reached by a `*.as.internal` name (`proxy`, `litellm`, `llm`, `zenoh`, `claude-bridge`, `hermes`, `open-webui`, `netshoot`, `dns`, `ingress`, `dev-ws01`). They are Docker network aliases in `docker-compose.yaml`, and Docker assigns the addresses (`BLIND_IP_RANGE`). Fixed addresses are only the VLAN legs (`PROXY_IP`, `INGRESS_IP`) and `DNS_IP`, all in `.env`; LAN hosts are in `squid/conf/lan.hosts`. `check-env.sh` rejects literal IPs anywhere else.
 - **`as-dns`** (CoreDNS) asks Docker's embedded DNS for `*.as.internal` and keeps one log of every DNS query in `as-net-blind` (`docker compose logs as-dns`).
   - Any other name gets NXDOMAIN on the spot. Nothing is forwarded out: `as-dns` sits only on the internal network, where Docker forwards no query to an outside resolver (CI-tested), so DNS cannot carry data out (subdomain tunneling).
   - Internet names are resolved by Squid itself, over its VLAN leg (`SQUID_DNS_UPSTREAM`), and only for requests that passed its ACLs.
@@ -176,6 +178,50 @@ Edit `.env` only (`VLAN_*`, `PROXY_IP`, `INGRESS_IP`, `BLIND_*`, `DNS_IP`, `LLM_
   `as-litellm-keys` creates the new key with the old key's settings, deletes the old
   one and moves the alias. You can also paste your own `sk-…` value (16+ characters)
   instead of the placeholder.
+
+### Message bus (Zenoh)
+
+`as-zenoh` runs the Zenoh router (`eclipse/zenoh`, `ZENOH_VERSION`, default `1.10.2`) at
+`zenoh.as.internal:7447`, on `as-net-blind` only. Hermes and the Claude agent are on it
+(`ALLOW_OUT` of their sidecars); the Claude bridge is not.
+
+- **Logins and ACL** (`zenoh/conf/zenoh.json5`): every system logs in with its own user
+  (`hermes`, `claude`) and password (`ZENOH_PASSWORD_<NAME>` in `zenoh/zenoh.env` and in the
+  system's env file, generated by `gen-secrets.sh`; `check-env.sh` compares them). A
+  system may publish, answer queries and hold liveliness tokens only under
+  `as/<name>/**`, and read all of `as/**`; everything else is denied. A wrong password,
+  no login, or a put under another system's prefix gets nowhere, so a key in the log
+  names its sender.
+- **Message log:** every put and delete on the bus, one JSON line each, in
+  `zenoh/logs/messages-<UTC date>.jsonl` on the host:
+  `{"received":"<UTC time>","event":"PUT","sample":{"key":"as/hermes/...","value":...,"encoding":...,"timestamp":...}}`.
+  A value sent as `text/plain` or `application/json` is logged as such, anything else
+  base64-encoded. Files are never deleted; clean up yourself. Queries and replies are not
+  logged. The subscriber is the router's REST plugin on `127.0.0.1` inside the container
+  (`zenoh/conf/run.sh`); if it or the router stops, the container exits and restarts.
+- **Clients** (Python, the router's version):
+  - the Claude agent: `/opt/zenoh/bin/python` (baked into its image);
+  - Hermes: `python3 -m venv /opt/data/zenoh && /opt/data/zenoh/bin/pip install "eclipse-zenoh==$ZENOH_VERSION"`,
+    from PyPI through Squid (`pypi.org`, `files.pythonhosted.org`, read-only).
+
+  ```python
+  import json, os, zenoh
+  user = os.environ["ZENOH_USER"]
+  conf = zenoh.Config()
+  conf.insert_json5("mode", '"client"')
+  conf.insert_json5("connect/endpoints", json.dumps([os.environ["ZENOH_CONNECT"]]))
+  conf.insert_json5("transport/auth/usrpwd", json.dumps(
+      {"user": user, "password": os.environ[f"ZENOH_PASSWORD_{user.upper()}"]}))
+  with zenoh.open(conf) as session:
+      session.put(f"as/{user}/chat", "hello", encoding=zenoh.Encoding.TEXT_PLAIN)
+  ```
+- **A new system** (e.g. `bridge`): a subject, an `own-<name>` rule and a policy in
+  `zenoh/conf/zenoh.json5`; `ZENOH_PASSWORD_<NAME>` in `zenoh/zenoh.env`, the system's env
+  file and the `GEN` list of `gen-secrets.sh`; `ZENOH_CONNECT`/`ZENOH_USER` in its
+  `environment`; `tcp:zenoh.as.internal:7447` in `ALLOW_OUT` of its sidecar. Then
+  `docker compose up -d --force-recreate as-zenoh <its sidecar> <it>`.
+- `as-zenoh` runs as `ZENOH_UID`:`ZENOH_GID` (default 1000, settable in `.env`), which
+  must own `zenoh/logs` (`start-main.sh` creates it, `check-env.sh` checks the owner).
 - A new client means a new `alias=ENV_VAR` entry in `LITELLM_CLIENT_KEYS` of
   `as-litellm-keys` and its env file in that service's `env_file`.
 
@@ -303,6 +349,14 @@ Known limitations:
   agent reaches the dashboard on `localhost:9119` anyway and can replace its login with
   a line in `/opt/data/.env`: it is the agent's own control plane, with no more rights
   than the agent.
+- **The message bus connects the agents.** Hermes and the Claude agent were isolated
+  from each other; through `as-zenoh` a prompt injected into one can reach the other, and
+  data can cross. The ACL fixes who may write under which key, and the log keeps every
+  message, but nothing filters content. Logins travel in plain TCP inside `as-net-blind`;
+  each agent can read its own password. A message sent before the log's subscriber is up
+  (the first seconds after `as-zenoh` starts) is not logged.
+- **PyPI is allowlisted** (read-only, for the bus client): like npm, any package an agent
+  installs runs its code in that agent's container.
 - **`as-netshoot` reaches everything** in `as-net-blind`, and the sidecars admit it.
   Whoever can `docker exec` already controls every container; the bridge still
   requires `CLAUDE_OAI_KEY`. Nothing can connect to netshoot.

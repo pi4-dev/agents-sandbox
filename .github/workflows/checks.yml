@@ -13,7 +13,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - name: shellcheck
-        run: shellcheck fw/fw.sh ssl/init_ca.sh start-main.sh check-env.sh gen-secrets.sh squid/*.sh tests/*.sh tests/*/*.sh
+        run: shellcheck fw/fw.sh ssl/init_ca.sh start-main.sh check-env.sh gen-secrets.sh squid/*.sh tests/*.sh tests/*/*.sh zenoh/conf/run.sh
       - name: no committed secrets or runtime state
         run: tests/check-no-secrets.sh
       - name: env examples use only CHANGE_ME_* placeholders

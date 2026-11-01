@@ -1,7 +1,7 @@
 #!/bin/bash
 # End-to-end check of the as-net-blind topology on real containers.
 #
-# Starts as-dns, as-squid, as-ingress, as-llm-gw and the netshoot and Hermes sidecars from
+# Starts as-dns, as-squid, as-ingress, as-llm-gw, as-zenoh and the netshoot and Hermes sidecars from
 # docker-compose.yaml (the *.example env files, a veth as the macvlan parent),
 # the real Claude bridge (its image is built; BRIDGE_PULL_POLICY=never uses a
 # prebuilt agents-sandbox/claude-bridge), and small stand-ins for Open WebUI, Hermes,
@@ -31,7 +31,7 @@ BRNF_OLD=
 export COMPOSE_PROJECT_NAME=as-net-blind-test COMPOSE_FILE=docker-compose.yaml:blind-test.yaml
 cleanup() {
   if [ -n "$BRNF_OLD" ]; then echo "$BRNF_OLD" >"$BRNF"; fi
-  docker rm -f asbt-lan asbt-ctl >/dev/null 2>&1 || true
+  docker rm -f asbt-lan asbt-ctl asbt-zsub >/dev/null 2>&1 || true
   (cd "$W" && docker compose down -v --remove-orphans >/dev/null 2>&1) || true
   ip link del "$PARENT" 2>/dev/null || true
   rm -rf "$W"
@@ -50,6 +50,7 @@ cd "$W"
 cp .env.example .env
 while IFS= read -r -d '' f; do cp "$f" "${f%.example}"; done < <(find . -name '*.env.example' -print0)
 for f in squid/conf/*.example hermes/config.yaml.example; do cp "$f" "${f%.example}"; done
+mkdir -p zenoh/logs && chown 1000:1000 zenoh/logs   # as-zenoh runs as ZENOH_UID (1000)
 # SQUID_DNS_UPSTREAM: nothing answers there, so an allowed request ends in 503
 # (a denied one is 403 before any lookup)
 sed -i -e "s/^VLAN_PARENT=.*/VLAN_PARENT=$PARENT/" \
@@ -92,8 +93,8 @@ DNS_IP=$(envval DNS_IP) INGRESS_IP=$(envval INGRESS_IP) PROXY_PORT=3128
 BLIND=${COMPOSE_PROJECT_NAME}_as-net-blind VLAN=${COMPOSE_PROJECT_NAME}_as-net-vlan
 
 docker compose build -q as-squid
-docker compose up -d --quiet-pull as-dns as-squid as-ingress as-llm-gw as-netshoot-net as-netshoot as-hermes-net \
-  as-claude-net as-claude-bridge-net
+docker compose up -d --quiet-pull as-dns as-squid as-ingress as-llm-gw as-zenoh as-netshoot-net as-netshoot \
+  as-hermes-net as-claude-net as-claude-bridge-net
 docker compose up -d --no-deps as-open-webui as-hermes as-litellm as-claude-main as-claude-bridge
 
 SIDECARS=(as-netshoot-net as-hermes-net as-claude-net as-claude-bridge-net)
@@ -174,6 +175,72 @@ for path in /openapi.json /redoc /health/readiness /.well-known/litellm-ui-confi
 done
 got=$(status as-hermes-net http://litellm.as.internal:4000/v1/models)
 check "Hermes -> LiteLLM directly is dropped (got $got)" test "$got" = 000
+
+# --- as-zenoh: the message bus. A Zenoh client (the router's version) runs in the network
+# namespace of a sidecar, so its firewall applies; the passwords are the example values.
+docker build -q -t asbt-zclient - >/dev/null <<EOF_ZC
+FROM python:3.13-slim
+RUN pip install --no-cache-dir "eclipse-zenoh==$(img ZENOH_VERSION)"
+EOF_ZC
+cat >"$W/zc.py" <<'EOF_ZC'
+import json, sys, time
+import zenoh
+endpoint, user, password, cmd, key = sys.argv[1:6]
+conf = zenoh.Config()
+conf.insert_json5("mode", '"client"')
+conf.insert_json5("connect/endpoints", json.dumps([endpoint]))
+conf.insert_json5("scouting/multicast/enabled", "false")
+if user != "-":
+    conf.insert_json5("transport/auth/usrpwd", json.dumps({"user": user, "password": password}))
+try:
+    session = zenoh.open(conf)
+except Exception:
+    print("REFUSED", flush=True)
+    sys.exit(0)
+if cmd == "pub":
+    session.put(key, sys.argv[6], encoding=zenoh.Encoding.TEXT_PLAIN)
+    time.sleep(1)
+    print("PUBLISHED", flush=True)
+else:
+    session.declare_subscriber(key, lambda s: print(f"GOT {s.key_expr} {s.payload.to_string()}", flush=True))
+    print("SUBSCRIBED", flush=True)
+    time.sleep(float(sys.argv[6]))
+session.close()
+EOF_ZC
+zep=tcp/$(ipb as-zenoh):7447
+zpw() { sed -nE "s/^ZENOH_PASSWORD_$1=(.*)/\1/p" zenoh/zenoh.env; }
+zc() { # zc <container whose network namespace> <zc.py args>: the client's output
+  local ns=$1; shift
+  docker run --rm --network "container:$ns" -v "$W/zc.py:/zc.py:ro" asbt-zclient \
+    timeout 20 python /zc.py "$zep" "$@" 2>&1 || true
+}
+for _ in $(seq 1 30); do
+  [ "$(docker inspect -f '{{.State.Health.Status}}' as-zenoh)" = healthy ] && break
+  sleep 2
+done
+check "as-zenoh is healthy (router and message log)" test "$(docker inspect -f '{{.State.Health.Status}}' as-zenoh)" = healthy
+docker run -d --name asbt-zsub --network container:as-claude-net -v "$W/zc.py:/zc.py:ro" asbt-zclient \
+  timeout 60 python /zc.py "$zep" claude "$(zpw CLAUDE)" sub 'as/**' 45 >/dev/null
+for _ in $(seq 1 20); do docker logs asbt-zsub 2>&1 | grep -q SUBSCRIBED && break; sleep 1; done
+check "Claude subscribes to the bus from its namespace" grep -q SUBSCRIBED <<<"$(docker logs asbt-zsub 2>&1)"
+check "Hermes publishes under as/hermes" grep -q PUBLISHED <<<"$(zc as-hermes-net hermes "$(zpw HERMES)" pub as/hermes/test 'hello from hermes')"
+zc as-hermes-net hermes "$(zpw HERMES)" pub as/claude/test 'spoofed by hermes' >/dev/null
+check "a wrong password is refused" grep -q REFUSED <<<"$(zc as-hermes-net hermes wrong pub as/hermes/test 'wrong password')"
+check "no login is refused (as-net-blind container without a sidecar)" grep -q REFUSED <<<"$(docker run --rm \
+  --network "$BLIND" -v "$W/zc.py:/zc.py:ro" asbt-zclient timeout 20 python /zc.py "$zep" - - pub as/hermes/test 'anonymous' 2>&1 || true)"
+check_not "the bridge's namespace cannot reach the bus" \
+  grep -q PUBLISHED <<<"$(zc as-claude-bridge-net claude "$(zpw CLAUDE)" pub as/claude/test 'from the bridge')"
+sleep 2
+zsub=$(docker logs asbt-zsub 2>&1)
+check "Claude receives Hermes' message" grep -q 'GOT as/hermes/test hello from hermes' <<<"$zsub"
+check_not "the ACL drops Hermes' message under as/claude" grep -q spoofed <<<"$zsub"
+zlog=$(cat zenoh/logs/messages-*.jsonl 2>/dev/null || true)
+check "the message log on the host has Hermes' message" \
+  grep -qF '"key":"as/hermes/test","value":"hello from hermes"' <<<"$zlog"
+check_not "the log has none of the refused or dropped messages" grep -qE 'spoofed|wrong password|anonymous|from the bridge' <<<"$zlog"
+got=$(status as-netshoot "http://$(ipb as-zenoh):8000/@/*/router")
+check "as-zenoh's REST (no login, no ACL) is closed to as-net-blind (got $got)" test "$got" = 000
+docker rm -f asbt-zsub >/dev/null 2>&1 || true
 # Claude: the agent and the bridge in separate namespaces; :9090 from LiteLLM only
 # bridge <container> <url> [curl args]: HTTP status (000 = no connection)
 bridge() { docker exec "$1" curl -s -o /dev/null -w '%{http_code}' --noproxy '*' --max-time 4 "${@:3}" "$2" || true; }

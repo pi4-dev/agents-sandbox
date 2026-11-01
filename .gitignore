@@ -22,6 +22,7 @@ claude-bridge/home/
 claude-bridge/workspace/
 hermes/data/
 hermes/workspace/
+zenoh/logs/
 open-webui/data/
 litellm/db/
 squid/logs/

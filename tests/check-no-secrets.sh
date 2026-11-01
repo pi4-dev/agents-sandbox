@@ -14,7 +14,7 @@ while IFS= read -r -d '' f; do
       echo "tracked env file: $f"; fail=1 ;;
     *.key|*.pem|*.p12|*.pfx|ssl/squid-ca.*)
       echo "tracked key/certificate material: $f"; fail=1 ;;
-    claude-main/data/*|claude-bridge/home/*|claude-bridge/workspace/*|hermes/data/*|hermes/workspace/*|open-webui/data/*|litellm/db/*|squid/logs/*)
+    claude-main/data/*|claude-bridge/home/*|claude-bridge/workspace/*|hermes/data/*|hermes/workspace/*|open-webui/data/*|litellm/db/*|squid/logs/*|zenoh/logs/*)
       echo "tracked runtime state: $f"; fail=1 ;;
   esac
 done < <(git ls-files -z)

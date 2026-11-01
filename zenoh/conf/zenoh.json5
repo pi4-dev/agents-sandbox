@@ -1,0 +1,69 @@
+// as-zenoh: the message bus of the agents, zenoh.as.internal:7447 (Zenoh 1.10, router).
+//
+// Every system logs in with its own user and password (ZENOH_PASSWORD_<NAME> in
+// zenoh/zenoh.env; run.sh writes the login dictionary) and may publish, answer queries
+// and hold liveliness tokens only under as/<name>/**, and read all of as/**. So the
+// key of a logged message names its sender. Anything else is denied.
+//
+// A new system: a subject, an own-<name> rule and a policy here, ZENOH_PASSWORD_<NAME>
+// in zenoh/zenoh.env and the system's env file, and ALLOW_OUT tcp:zenoh.as.internal:7447
+// in its sidecar (README, "Message bus").
+{
+  mode: "router",
+  // IPv4 only: the networks have no IPv6, and binding [::] fails
+  listen: { endpoints: ["tcp/0.0.0.0:7447"] },
+  scouting: { multicast: { enabled: false }, gossip: { enabled: false } },
+  transport: { auth: { usrpwd: { dictionary_file: "/tmp/zenoh-users.txt" } } },
+
+  // The REST plugin is the message log's subscriber (run.sh). It listens on 127.0.0.1,
+  // inside this container only: a REST client would bypass the logins and the ACL.
+  plugins_loading: { enabled: true, search_dirs: ["/"] },
+  plugins: { rest: { http_port: "127.0.0.1:8000" } },
+  adminspace: { enabled: true, permissions: { read: true, write: false } },
+
+  access_control: {
+    enabled: true,
+    default_permission: "deny",
+    rules: [
+      {
+        id: "own-hermes",
+        messages: ["put", "delete", "declare_queryable", "reply", "liveliness_token"],
+        flows: ["ingress"],
+        permission: "allow",
+        key_exprs: ["as/hermes/**"],
+      },
+      {
+        id: "own-claude",
+        messages: ["put", "delete", "declare_queryable", "reply", "liveliness_token"],
+        flows: ["ingress"],
+        permission: "allow",
+        key_exprs: ["as/claude/**"],
+      },
+      {
+        // subscribe to, query and watch the whole bus
+        id: "bus-read",
+        messages: ["declare_subscriber", "query", "declare_liveliness_subscriber", "liveliness_query"],
+        flows: ["ingress"],
+        permission: "allow",
+        key_exprs: ["as/**"],
+      },
+      {
+        // what the router hands a system: publications, queries to its queryables,
+        // replies and liveliness tokens, all within the bus
+        id: "bus-deliver",
+        messages: ["put", "delete", "query", "reply", "liveliness_token"],
+        flows: ["egress"],
+        permission: "allow",
+        key_exprs: ["as/**"],
+      },
+    ],
+    subjects: [
+      { id: "hermes", usernames: ["hermes"] },
+      { id: "claude", usernames: ["claude"] },
+    ],
+    policies: [
+      { rules: ["own-hermes", "bus-read", "bus-deliver"], subjects: ["hermes"] },
+      { rules: ["own-claude", "bus-read", "bus-deliver"], subjects: ["claude"] },
+    ],
+  },
+}
