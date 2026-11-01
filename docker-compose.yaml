@@ -200,6 +200,7 @@ services:
       - ./litellm/models:/app/models:ro      # one file per API endpoint (include: in the config)
       - ./ssl/squid-ca.crt:/certs/proxy-ca.crt:ro
       - ./litellm/logging.json:/app/logging.json:ro
+      - ./litellm/callbacks:/app/callbacks:ro # request hooks (litellm_settings.callbacks)
       - ./litellm/logs:/var/log/litellm      # access.log: every request, rotated daily, 7 kept
     command: ["--config", "/app/config.yaml", "--port", "4000", "--log_config", "/app/logging.json"]
     healthcheck:

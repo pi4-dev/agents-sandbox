@@ -6,6 +6,13 @@ include:
 
 litellm_settings:
   drop_params: true
+  # One leading system message per chat request (vLLM Qwen templates reject more):
+  # litellm/callbacks/system_messages.py, mounted at /app/callbacks.
+  callbacks: callbacks.system_messages.handler
+  # /v1/messages (Claude Code) to openai/ deployments goes out as chat/completions,
+  # not the Responses API: OpenAI-compatible upstreams (vLLM, another LiteLLM) may
+  # have no /v1/responses or rebuild it into several system messages.
+  use_chat_completions_url_for_anthropic_messages: true
   request_timeout: 300
 general_settings:
   trusted_proxy_ranges: []

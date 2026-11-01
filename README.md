@@ -197,6 +197,13 @@ Claude Code on a model of LiteLLM, the way Hermes reaches its model:
 - Own workspace and home (`claude-qwen/data/`), the Claude agent's managed settings
   (`claude-main/policy`), its own `claude-qwen/CLAUDE.md`; on the bus as `claude-qwen`.
 - Start a session: `docker compose exec as-claude-qwen claude`.
+- **System messages.** vLLM's Qwen templates take one system message, first
+  (`System message must be at the beginning.`). LiteLLM (`litellm/litellm-config.yaml`)
+  therefore sends `/v1/messages` to `openai/` deployments as chat/completions
+  (`use_chat_completions_url_for_anthropic_messages`, not the Responses API, which an
+  upstream rebuilds on its own), and `litellm/callbacks/system_messages.py` merges leading
+  system messages into one and turns later ones into user messages, for every client.
+  Test: `tests/litellm/run-system-tests.sh`.
 
 ### Message bus (Zenoh)
 
