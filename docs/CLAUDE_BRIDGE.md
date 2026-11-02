@@ -40,7 +40,7 @@ writes only to its home, its workspace and `/tmp`.
 1. **Key.** `./gen-secrets.sh` generates `CLAUDE_OAI_KEY` into
    `litellm/litellm.env` and `claude-bridge/claude-bridge.env`. `check-env.sh`
    fails when the two differ.
-2. **Directories.** `start-main.sh` creates `claude-bridge/workspace` and
+2. **Directories.** `run-first.sh` creates `claude-bridge/workspace` and
    `claude-bridge/home`. They must belong to UID 1000 (`node`); `check-env.sh`
    warns otherwise and prints the `chown` to run.
 3. **Login.** The bridge needs its own Claude login, not the agent's. Do not

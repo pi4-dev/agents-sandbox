@@ -3,7 +3,7 @@
 # files, and that IP addresses appear only in .env and squid/conf/lan.hosts
 # (everything else uses *.as.internal names, Docker network aliases served by as-dns).
 #
-#   ./check-env.sh             your real files (.env, */*.env); start-main.sh runs it
+#   ./check-env.sh             your real files (.env, */*.env); run-first.sh runs it
 #   ./check-env.sh --examples  tracked *.example files use only CHANGE_ME_* (CI)
 #
 # Values are never printed, only file and key names.
@@ -199,7 +199,7 @@ if [ $mode = local ]; then
            "${bridge_home:-./claude-bridge/home}"; do
     d=${d#./}
     if [ ! -d "$d" ]; then
-      echo "check-env: warning: $d is missing; Docker would create it as root and the container could not write it (start-main.sh creates it)" >&2
+      echo "check-env: warning: $d is missing; Docker would create it as root and the container could not write it (run-first.sh creates it)" >&2
     elif bad=$(find "$d" ! -uid 1000 -print -quit 2>/dev/null) && [ -n "$bad" ]; then
       echo "check-env: warning: $bad is not owned by UID 1000 (node in the container), which cannot write it; in a home the Claude login is not saved. Fix: sudo chown -R 1000:1000 $d" >&2
     fi
@@ -218,7 +218,7 @@ if [ $mode = local ]; then
   for d in hermes/workspace hermes/data; do
     depth=(); [ "$d" = hermes/data ] && depth=(-maxdepth 1)
     if [ ! -d "$d" ]; then
-      echo "check-env: warning: $d is missing; Docker would create it as root and Hermes (PUID $puid) could not write it (start-main.sh creates it)" >&2
+      echo "check-env: warning: $d is missing; Docker would create it as root and Hermes (PUID $puid) could not write it (run-first.sh creates it)" >&2
     elif bad=$(find "$d" "${depth[@]}" ! -uid "$puid" -print -quit 2>/dev/null) && [ -n "$bad" ]; then
       echo "check-env: warning: $bad is not owned by UID $puid (PUID in hermes/hermes.env), so Hermes cannot write it. Fix: sudo chown -R $puid:$pgid $d" >&2
     fi
@@ -253,7 +253,7 @@ fi
 if [ $mode = local ]; then
   zuid=$(get .env ZENOH_UID 2>/dev/null || true); zuid=${zuid:-1000}
   if [ ! -d zenoh/logs ]; then
-    echo "check-env: warning: zenoh/logs is missing; Docker would create it as root and as-zenoh (UID $zuid) could not log (start-main.sh creates it)" >&2
+    echo "check-env: warning: zenoh/logs is missing; Docker would create it as root and as-zenoh (UID $zuid) could not log (run-first.sh creates it)" >&2
   elif [ "$(stat -c %u zenoh/logs)" != "$zuid" ]; then
     echo "check-env: warning: zenoh/logs is not owned by UID $zuid (ZENOH_UID), so as-zenoh cannot write the message log. Fix: sudo chown $zuid zenoh/logs" >&2
   fi
@@ -264,7 +264,7 @@ if [ $mode = local ]; then
   luid=$(get .env LOGS_UID 2>/dev/null || true); luid=${luid:-1000}
   for d in dns/logs ingress/logs llm-gw/logs litellm/logs; do
     if [ ! -d "$d" ]; then
-      echo "check-env: warning: $d is missing; Docker would create it as root (start-main.sh creates it)" >&2
+      echo "check-env: warning: $d is missing; Docker would create it as root (run-first.sh creates it)" >&2
     elif [ "$d" != litellm/logs ] && [ "$(stat -c %u "$d")" != "$luid" ]; then
       echo "check-env: warning: $d is not owned by UID $luid (LOGS_UID), so its container cannot write the access log. Fix: sudo chown $luid $d" >&2
     fi
