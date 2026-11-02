@@ -230,7 +230,7 @@ Qwen are on it (`ALLOW_OUT` of their sidecars); the Claude bridge is not.
   A value sent as `text/plain` or `application/json` is logged as such, anything else
   base64-encoded. Files are never deleted; clean up yourself. Queries and replies are not
   logged. The subscriber is the router's REST plugin on `127.0.0.1` inside the container
-  (`zenoh/conf/run.sh`); if it or the router stops, the container exits and restarts.
+  (`zenoh/conf/run.sh`); if the stream ends it reconnects; if the router stops, the container exits and restarts.
 - **Clients** (Python, the router's version):
   - the Claude agent: `/opt/zenoh/bin/python` (baked into its image);
   - Hermes: `python3 -m venv /opt/data/zenoh && /opt/data/zenoh/bin/pip install "eclipse-zenoh==$ZENOH_VERSION"`,

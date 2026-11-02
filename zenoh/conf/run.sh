@@ -10,7 +10,8 @@
 #      "encoding":...,"timestamp":...}}
 #   A value that is not UTF-8 text or JSON comes base64-encoded. Queries and replies
 #   are not logged.
-# - When either part stops, the container exits and Docker restarts it.
+# - When the router stops, the container exits and Docker restarts it; when only the
+#   message stream ends, the logger connects again.
 set -eu
 LOG_DIR=${ZENOH_LOG_DIR:-/log}
 USERS=/tmp/zenoh-users.txt
@@ -39,16 +40,24 @@ until wget -q -O /dev/null 'http://127.0.0.1:8000/@/*/router' 2>/dev/null; do
 done
 echo "as-zenoh: logging every put and delete to $LOG_DIR/messages-<UTC date>.jsonl"
 
-event=
-wget -q -O - --header 'Accept: text/event-stream' 'http://127.0.0.1:8000/**' |
-  while IFS= read -r line; do
-    case $line in
-      'event: '*) event=${line#event: } ;;
-      'data: '*)
-        printf '{"received":"%s","event":"%s","sample":%s}\n' \
-          "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$event" "${line#data: }" \
-          >>"$LOG_DIR/messages-$(date -u +%Y-%m-%d).jsonl" ;;
-    esac
-  done
-echo "as-zenoh: the message stream ended; exiting so Docker restarts the router" >&2
+# -T 0: no read timeout. BusyBox wget gives up after 900 s without data by default,
+# and a quiet bus sends none. If the stream still ends (the REST plugin closed it),
+# connect again while the router runs; only a stopped router stops the container.
+while kill -0 "$zpid" 2>/dev/null; do
+  event=
+  wget -q -T 0 -O - --header 'Accept: text/event-stream' 'http://127.0.0.1:8000/**' |
+    while IFS= read -r line; do
+      case $line in
+        'event: '*) event=${line#event: } ;;
+        'data: '*)
+          printf '{"received":"%s","event":"%s","sample":%s}\n' \
+            "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$event" "${line#data: }" \
+            >>"$LOG_DIR/messages-$(date -u +%Y-%m-%d).jsonl" ;;
+      esac
+    done || true
+  kill -0 "$zpid" 2>/dev/null || break
+  echo "as-zenoh: the message stream ended; reconnecting" >&2
+  sleep 1
+done
+echo "as-zenoh: zenohd exited; exiting so Docker restarts the router" >&2
 exit 1
