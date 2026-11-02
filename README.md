@@ -31,8 +31,8 @@ compose.hermes-privileged.yaml Opt-in full-trust (privileged) mode for Hermes
 .env.example                   All addressing and optional overrides (copy to .env)
 proxy.env                      Agent proxy variables (by name)
 run-first.sh                   Generate missing secrets, create directories, check env files, start everything
-start-main.sh                  Claude Code session in the Claude agent (as-claude-main, Remote Control)
-start-claude.sh                Claude Code session in Claude on Qwen (as-claude-qwen)
+start-claude-main.sh           Claude Code session in the Claude agent (as-claude-main, Remote Control)
+start-claude-qwen.sh           Claude Code session in Claude on Qwen (as-claude-qwen)
 gen-secrets.sh                 Create env files from the examples, fill generated CHANGE_ME_* values
 check-env.sh                   Placeholders, values that must match, no IPs outside .env
 dns/                           CoreDNS config (Corefile), your additions (local.d/*.conf, git-ignored), image (Dockerfile, run.sh), query log (logs/)
@@ -130,7 +130,7 @@ In short:
 5. Create the proxy CA: `ssl/init_ca.sh` (needs `sudo` to hand the key to UID 13).
 6. Validate: `tests/compose/validate.sh`, then `docker compose config -q` with your real files.
 7. Start: `./run-first.sh` (or `./check-env.sh && docker compose up -d`), then the agent
-   sessions: `./start-main.sh` (Claude agent), `./start-claude.sh` (Claude on Qwen).
+   sessions: `./start-claude-main.sh` (Claude agent), `./start-claude-qwen.sh` (Claude on Qwen).
 8. If you use the Claude bridge, set it up in its own directories and give it its own login ([CLAUDE_BRIDGE.md](docs/CLAUDE_BRIDGE.md), "Setting up the bridge").
 
 ### Changing addressing
@@ -199,7 +199,7 @@ Claude Code on a model of LiteLLM, the way Hermes reaches its model:
   (main, opus, sonnet, haiku, subagents).
 - Own workspace and home (`claude-qwen/data/`), the Claude agent's managed settings
   (`claude-main/policy`), its own `claude-qwen/CLAUDE.md`; on the bus as `claude-qwen`.
-- Start a session: `./start-claude.sh` (`docker compose exec as-claude-qwen claude`).
+- Start a session: `./start-claude-qwen.sh` (`docker compose exec as-claude-qwen claude`).
 - **Effort:** `CLAUDE_CODE_EFFORT_LEVEL=medium` in `docker-compose.yaml`, which overrides
   `/effort` and the settings in the session; change it there and recreate the container.
 - **Requests:** LiteLLM (`litellm/litellm-config.yaml`) sends `/v1/messages` to `openai/`

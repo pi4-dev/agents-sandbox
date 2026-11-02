@@ -1,6 +1,6 @@
 #!/bin/sh
 # Prepare and start the environment: secrets, bind-mounted directories, env
-# checks, every container. Agent sessions: ./start-main.sh, ./start-claude.sh.
+# checks, every container. Agent sessions: ./start-claude-main.sh, ./start-claude-qwen.sh.
 set -eu
 cd "$(dirname "$0")"
 

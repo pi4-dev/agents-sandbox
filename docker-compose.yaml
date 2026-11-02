@@ -462,7 +462,7 @@ services:
     stdin_open: true
     tty: true
     restart: unless-stopped
-    # the OpenAI bridge runs in as-claude-bridge; this is only for agent sessions (start-main.sh)
+    # the OpenAI bridge runs in as-claude-bridge; this is only for agent sessions (start-claude-main.sh)
     command: ["sh", "-c", "trap 'exit 0' TERM INT; sleep infinity & wait"]
 
 # - - - - - - - - - - - - - - - - - - - - - - - - - - -
