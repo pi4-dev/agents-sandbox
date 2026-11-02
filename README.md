@@ -197,6 +197,10 @@ Claude Code on a model of LiteLLM, the way Hermes reaches its model:
 - `CLAUDE_QWEN_MODEL` in `.env`: the `model_name` from `litellm/models/*.yaml`
   (e.g. your Qwen3.8-27B-Claude-Code deployment). Claude Code uses it for every slot
   (main, opus, sonnet, haiku, subagents).
+- `CLAUDE_QWEN_CONTEXT_TOKENS` in `.env`: the model's context window in tokens (vLLM
+  `max_model_len`), passed as `CLAUDE_CODE_MAX_CONTEXT_TOKENS`. Claude Code does not know
+  the model and would otherwise assume 200k (`Model "…" isn't recognized`) and compact at
+  the wrong point.
 - Own workspace and home (`claude-qwen/data/`), the Claude agent's managed settings
   (`claude-main/policy`), its own `claude-qwen/CLAUDE.md`; on the bus as `claude-qwen`.
 - Start a session: `./start-claude-qwen.sh` (`docker compose exec as-claude-qwen claude`).
