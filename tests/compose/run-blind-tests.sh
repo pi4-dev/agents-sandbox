@@ -77,6 +77,7 @@ services:
     command: ["caddy", "respond", "--listen", ":9119", "HERMES-OK"]
   as-litellm:
     image: $NETSHOOT
+    entrypoint: !reset null   # not litellm/run.sh: the stand-in only sleeps
     command: ["sleep", "infinity"]
     healthcheck: { test: ["CMD", "true"], interval: 1s }
   as-claude-main:
