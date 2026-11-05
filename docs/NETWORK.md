@@ -27,8 +27,9 @@ Drawing: [topology.svg](topology.svg) (amber frames are the `fw.sh` sidecars).
                        │   │  as-net-blind (internal):  proxy.as.internal   ingress.as.internal  │
                        │   │     as-dns (DNS_IP)  as-litellm  as-llm-gw  as-open-webui  as-zenoh │
                        │   │     as-claude-net (+ claude-main)  as-claude-bridge-net (+ bridge)  │
-                       │   │     as-hermes-net (+ hermes)  as-netshoot-net                       │
+                       │   │     as-hermes-net (+ hermes)  as-netshoot-net  as-headroom          │
                        │   │  as-net-litellm-egress (internal): as-litellm <-> as-squid          │
+                       │   │  as-net-headroom-egress (internal): as-headroom <-> as-squid        │
                        │   │  as-net-litellm-db (internal): as-litellm, as-litellm-db            │
                        │   └─────────────────────────────────────────────────────────────────────┘
 ```
@@ -48,6 +49,10 @@ Drawing: [topology.svg](topology.svg) (amber frames are the `fw.sh` sidecars).
 - **LiteLLM talks to Squid over `as-net-litellm-egress`.** Only LiteLLM and Squid are on
   that network. It is how Squid tells LiteLLM apart for the provider APIs and
   LAN LLM servers.
+- **Headroom talks to Squid over `as-net-headroom-egress`** (`hf-proxy.as.internal`) the
+  same way: only `as-headroom` and Squid are on it, and through it Squid serves
+  `squid/conf/headroom_domains.txt` (Hugging Face models) read-only and nothing else.
+  The network is not in `localnet`.
 - **Addresses inside are Docker's** (`BLIND_IP_RANGE`). Names are network
   aliases (`*.as.internal`). Fixed addresses: the two VLAN legs (`PROXY_IP`,
   `INGRESS_IP`) and `DNS_IP`.
@@ -130,7 +135,8 @@ NAT to the internet is needed only for Squid.
 - **Inside the Docker host:** containers in `as-net-blind` cannot put a packet on
   the VLAN, so they cannot forge VLAN addresses either. Inside `as-net-blind`, the
   sidecars drop packets with a source other than their own. Squid identifies
-  LiteLLM by the network a request arrives on (`as-net-litellm-egress`), not by an address.
+  LiteLLM by the network a request arrives on (`as-net-litellm-egress`), not by an address;
+  `as-headroom` the same way (`as-net-headroom-egress`).
 
 ## 6. MikroTik (RouterOS v7), router as the DNS server
 

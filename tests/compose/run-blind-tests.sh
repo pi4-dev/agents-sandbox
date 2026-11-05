@@ -1,7 +1,7 @@
 #!/bin/bash
 # End-to-end check of the as-net-blind topology on real containers.
 #
-# Starts as-dns, as-squid, as-ingress, as-llm-gw, as-zenoh and the netshoot and Hermes sidecars from
+# Starts as-dns, as-squid, as-ingress, as-llm-gw, as-headroom (real image), as-zenoh and the netshoot and Hermes sidecars from
 # docker-compose.yaml (the *.example env files, a veth as the macvlan parent),
 # the real Claude bridge (its image is built; BRIDGE_PULL_POLICY=never uses a
 # prebuilt agents-sandbox/claude-bridge), and small stand-ins for Open WebUI, Hermes,
@@ -52,7 +52,8 @@ while IFS= read -r -d '' f; do cp "$f" "${f%.example}"; done < <(find . -name '*
 for f in squid/conf/*.example hermes/config.yaml.example; do cp "$f" "${f%.example}"; done
 mkdir -p zenoh/logs && chown 1000:1000 zenoh/logs   # as-zenoh runs as ZENOH_UID (1000)
 mkdir -p dns/logs ingress/logs llm-gw/logs litellm/logs
-chown 1000:1000 dns/logs ingress/logs llm-gw/logs     # as-dns, as-ingress, as-llm-gw run as LOGS_UID (1000)
+mkdir -p headroom/data
+chown 1000:1000 dns/logs ingress/logs llm-gw/logs headroom/data   # as-dns, as-ingress, as-llm-gw, as-headroom run as LOGS_UID (1000)
 # SQUID_DNS_UPSTREAM: nothing answers there, so an allowed request ends in 503
 # (a denied one is 403 before any lookup)
 sed -i -e "s/^VLAN_PARENT=.*/VLAN_PARENT=$PARENT/" \
@@ -87,6 +88,8 @@ services:
     command: ["sleep", "infinity"]
   as-claude-bridge:
     pull_policy: ${BRIDGE_PULL_POLICY:-build}
+  as-headroom:
+    depends_on: !reset {}  # the real image; LiteLLM is the stand-in, started below
   as-squid:
     ulimits: !reset {}    # some sandboxes refuse raising nofile
 EOF
@@ -178,8 +181,32 @@ done
 got=$(status as-hermes-net http://litellm.as.internal:4000/v1/models)
 check "Hermes -> LiteLLM directly is dropped (got $got)" test "$got" = 000
 # as-claude-qwen: Claude Code's Anthropic API through as-llm-gw, nothing of LiteLLM directly
-got=$(status as-claude-qwen-net http://llm.as.internal:4000/v1/messages)
-check "Claude on Qwen -> as-llm-gw /v1/messages -> LiteLLM (got $got)" test "$got" = 200
+got=$(status as-claude-qwen-net http://llm.as.internal:4000/v1/models)
+check "Claude on Qwen -> as-llm-gw /v1/models -> LiteLLM (got $got)" test "$got" = 200
+# as-headroom: chat and messages go through it (the gateway adds its token)
+for _ in $(seq 1 60); do
+  [ "$(docker inspect -f '{{.State.Health.Status}}' as-headroom 2>/dev/null)" = healthy ] && break
+  sleep 2
+done
+check "as-headroom (real image) is healthy" test "$(docker inspect -f '{{.State.Health.Status}}' as-headroom)" = healthy
+post() { docker exec "$1" curl -s -o /dev/null -w '%{http_code}' --noproxy '*' --max-time 20 -H 'content-type: application/json' \
+           -H 'anthropic-version: 2023-06-01' -d '{"model":"m","max_tokens":5,"messages":[{"role":"user","content":"hi"}]}' "$2" || true; }
+got=$(post as-claude-qwen-net http://llm.as.internal:4000/v1/messages)
+check "Claude on Qwen -> as-llm-gw /v1/messages -> Headroom (got $got)" \
+  grep -q 'path=/v1/messages ' <<<"$(docker logs as-headroom 2>&1)"
+check_not "... and not refused by the gateway (got $got)" grep -qE '^(000|404)$' <<<"$got"
+got=$(post as-netshoot http://headroom.as.internal:8787/v1/messages)
+check "netshoot -> Headroom without the token -> 401 (got $got)" test "$got" = 401
+got=$(post as-hermes-net http://headroom.as.internal:8787/v1/messages)
+check "Hermes -> Headroom directly is dropped (got $got)" test "$got" = 000
+got=$(code as-headroom http://huggingface.co/)
+check "Headroom -> huggingface.co passes Squid's ACL on its leg (503: no DNS in the test; got $got)" test "$got" = 503
+got=$(code as-headroom http://api.anthropic.com/)
+check "Headroom -> the agents' allowlist -> 403 (got $got)" test "$got" = 403
+got=$(code as-headroom http://openrouter.ai/)
+check "Headroom -> LLM provider API -> 403 (got $got)" test "$got" = 403
+got=$(code as-netshoot http://huggingface.co/)
+check "agent -> huggingface.co -> 403 (got $got)" test "$got" = 403
 got=$(status as-claude-qwen-net http://llm.as.internal:4000/openapi.json)
 check "Claude on Qwen -> as-llm-gw /openapi.json -> 404 (got $got)" test "$got" = 404
 got=$(status as-claude-qwen-net http://litellm.as.internal:4000/v1/models)

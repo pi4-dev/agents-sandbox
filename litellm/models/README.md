@@ -1,7 +1,8 @@
 # LiteLLM model sets
 
-Each file here is one **API endpoint with its models**. `litellm/litellm-config.yaml`
-pulls them in with `include:`, and LiteLLM merges their `model_list`s. The
+Each file here is one **API endpoint with its models**. At start `litellm/run.sh`
+includes every `*.yaml` in this directory (name order) in the config, and LiteLLM
+merges their `model_list`s; `litellm/litellm-config.yaml` holds only the settings. The
 `model_name` is what clients (Hermes, Open WebUI) ask for, so keep it unique
 across files.
 
@@ -23,8 +24,8 @@ across files.
          api_base: os.environ/MYAPI_API_BASE     # omit for providers LiteLLM knows
          api_key: os.environ/MYAPI_API_KEY
    ```
-2. **Include it.** Add `- models/<name>.yaml` under `include:` in
-   `litellm/litellm-config.yaml`.
+2. **Nothing to include.** Every `*.yaml` here is loaded; to park a file, rename it
+   (e.g. `<name>.yaml.off`).
 3. **Secrets.** Add `MYAPI_API_KEY=CHANGE_ME_MYAPI_API_KEY` (and `MYAPI_API_BASE=…`
    if used) to `litellm/litellm.env.example`, and the real values to
    `litellm/litellm.env`. `check-env.sh` refuses to start while a placeholder is left.
@@ -35,11 +36,11 @@ across files.
      and use that name in `api_base`, then `squid/reload_squid.sh`. LiteLLM has no
      route out of `as-net-blind`: it reaches the server through Squid's LiteLLM leg (any
      port); allow Squid -> server on the edge router (docs/NETWORK.md).
-5. **Apply.** Run `docker compose up -d as-litellm`.
+5. **Apply.** Run `docker compose restart as-litellm` (LiteLLM reads its config at start).
 
 ## Removing an endpoint
 
-Delete its line under `include:`, its keys from the env files, and its domain
+Delete (or rename) its file, its keys from the env files, and its domain
 from `llm_api_domains.txt` (or its line in `lan.hosts`).
 
 ## Defaults for clients

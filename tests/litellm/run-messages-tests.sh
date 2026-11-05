@@ -1,12 +1,15 @@
 #!/bin/bash
-# litellm/litellm-config.yaml against a real LiteLLM: Claude Code's /v1/messages
+# litellm/litellm-config.yaml and litellm/run.sh against a real LiteLLM:
+# - run.sh loads every litellm/models/*.yaml (no include: in the config; an old
+#   include: block left in the config is dropped, other files are not loaded);
+# - Claude Code's /v1/messages
 # reaches an openai/ deployment as one chat/completions request with the system
 # prompt as the first message, not as a Responses API request (an upstream may
 # rebuild that into several system messages; vLLM Qwen: "System message must be
 # at the beginning."). The upstream is tests/litellm/upstream-recorder.py.
 #
 # Needs docker; pulls the LiteLLM image from docker-compose.yaml.
-# Usage: tests/litellm/run-system-tests.sh
+# Usage: tests/litellm/run-messages-tests.sh
 set -euo pipefail
 
 REPO=$(cd "$(dirname "$0")/../.." && pwd)
@@ -15,17 +18,24 @@ W=$(mktemp -d)
 trap 'rm -rf "$W"' EXIT
 chmod 755 "$W"
 
-# The repo config with the model includes swapped for one test deployment.
+# The repo config plus an include: block of the old kind (a file that is not there:
+# run.sh must drop it), and a models directory with two endpoint files and a README.
 mkdir "$W/models"
-sed -E '/^  - models\//d; s|^include:|include:\n  - models/test.yaml|' "$REPO/litellm/litellm-config.yaml" >"$W/config.yaml"
+{ cat "$REPO/litellm/litellm-config.yaml"; printf 'include:\n  - models/gone.yaml\n'; } >"$W/config.yaml"
 cat >"$W/models/test.yaml" <<'YAML'
 model_list:
   - model_name: qwen
     litellm_params: { model: openai/qwen, api_base: "http://127.0.0.1:9999/v1", api_key: x }
 YAML
+cat >"$W/models/second.yaml" <<'YAML'
+model_list:
+  - model_name: second
+    litellm_params: { model: openai/second, api_base: "http://127.0.0.1:9999/v1", api_key: x }
+YAML
+echo "not a model file" >"$W/models/README.md"
 cat >"$W/run.sh" <<'SH'
 python3 /t/upstream-recorder.py 9999 >/w/upstream.log 2>&1 &
-litellm --config /app/config.yaml --port 4000 >/w/litellm.log 2>&1 &
+sh /scripts/run.sh --port 4000 >/w/litellm.log 2>&1 &
 python3 - <<'PY'
 import json, time, urllib.request as u
 for _ in range(120):
@@ -33,6 +43,12 @@ for _ in range(120):
         u.urlopen("http://127.0.0.1:4000/health/liveliness"); break
     except Exception:
         time.sleep(1)
+r = u.Request("http://127.0.0.1:4000/v1/models", headers={"Authorization": "Bearer sk-test"})
+try:
+    ids = sorted(m["id"] for m in json.load(u.urlopen(r))["data"])
+except Exception as e:
+    ids = [repr(e)]
+open("/w/models.txt", "w").write(" ".join(ids))
 def post(path, body):
     r = u.Request("http://127.0.0.1:4000" + path, json.dumps(body).encode(), method="POST",
                   headers={"Authorization": "Bearer sk-test", "content-type": "application/json"})
@@ -52,12 +68,13 @@ SH
 docker run --rm -e LITELLM_MASTER_KEY=sk-test -e LITELLM_LOCAL_MODEL_COST_MAP=True --entrypoint sh \
   -v "$W/config.yaml:/app/config.yaml:ro" -v "$W/models:/app/models:ro" \
   -v "$REPO/tests/litellm/upstream-recorder.py:/t/upstream-recorder.py:ro" \
-  -v "$W/run.sh:/t/run.sh:ro" -v "$W:/w" "$LITELLM" /t/run.sh
+  -v "$REPO/litellm/run.sh:/scripts/run.sh:ro" -v "$W/run.sh:/t/run.sh:ro" -v "$W:/w" "$LITELLM" /t/run.sh
 
 fail=0
 expect() {
   if [ "$2" = "$3" ]; then echo "ok   $1"; else echo "FAIL $1: got '$2', want '$3'"; fail=1; fi
 }
+expect "run.sh: every models/*.yaml loaded"        "$(cat "$W/models.txt" 2>/dev/null)" "qwen second"
 mapfile -t got <"$W/upstream.log"
 expect "messages, system blocks"                 "${got[0]:-}" "/v1/chat/completions system,user"
 expect "messages, conversation"                   "${got[1]:-}" "/v1/chat/completions system,user,assistant,user"

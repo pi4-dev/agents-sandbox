@@ -13,7 +13,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - name: shellcheck
-        run: shellcheck fw/fw.sh ssl/init_ca.sh run-first.sh start-claude-main.sh start-claude-qwen.sh check-env.sh gen-secrets.sh squid/*.sh tests/*.sh tests/*/*.sh zenoh/conf/run.sh hermes/ca-trust.sh dns/run.sh
+        run: shellcheck fw/fw.sh ssl/init_ca.sh run-first.sh start-claude-main.sh start-claude-qwen.sh check-env.sh gen-secrets.sh squid/*.sh tests/*.sh tests/*/*.sh litellm/run.sh zenoh/conf/run.sh hermes/ca-trust.sh dns/run.sh
       - name: no committed secrets or runtime state
         run: tests/check-no-secrets.sh
       - name: env examples use only CHANGE_ME_* placeholders
@@ -45,8 +45,15 @@ jobs:
       - uses: actions/checkout@v5
       - name: as-litellm-keys registers pre-generated keys in a real LiteLLM
         run: tests/litellm/run-keys-tests.sh
-      - name: LiteLLM sends /v1/messages to openai/ deployments as chat/completions
+      - name: LiteLLM loads every models/*.yaml and sends /v1/messages to openai/ deployments as chat/completions
         run: tests/litellm/run-messages-tests.sh
+
+  headroom:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: as-llm-gw -> as-headroom -> LiteLLM (compression, streaming, token, header filtering)
+        run: tests/headroom/run-headroom-tests.sh
 
   squid-acl:
     runs-on: ubuntu-24.04

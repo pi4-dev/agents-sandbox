@@ -35,6 +35,10 @@ acl localnet src "/var/lib/squid/localnet.txt"
 # the identity, not an address an agent could forge.
 acl litellm_leg localip "/var/lib/squid/litellm_net.txt"
 acl litellm_src src     "/var/lib/squid/litellm_net.txt"
+# as-headroom the same way, on its own leg (as-net-headroom-egress, HEADROOM_EGRESS_SUBNET):
+# headroom_domains.txt (Hugging Face models) and nothing else; not in localnet
+acl headroom_leg localip "/var/lib/squid/headroom_net.txt"
+acl headroom_src src     "/var/lib/squid/headroom_net.txt"
 acl SSL_ports port 443
 acl Safe_ports port 80 443
 acl CONNECT method CONNECT
@@ -49,6 +53,7 @@ acl denied_urls  url_regex -i "/etc/squid/conf/denied_urls.txt"
 acl llm_api      dstdomain -n "/etc/squid/conf/llm_api_domains.txt"
 # LAN hosts from lan.hosts: LiteLLM only, any port (local LLM servers rarely run on 80/443)
 acl lan_hosts    dstdomain -n .lan.internal
+acl headroom_dl  dstdomain -n "/etc/squid/conf/headroom_domains.txt"
 
 acl write_methods method POST PUT PATCH DELETE
 
@@ -78,6 +83,7 @@ http_access deny CONNECT !SSL_ports
 http_access allow localnet CONNECT full_domains
 http_access allow localnet CONNECT path_domains
 http_access allow litellm_leg litellm_src CONNECT llm_api
+http_access allow headroom_leg headroom_src CONNECT headroom_dl
 
 # decrypted / plaintext requests: enforce Host, URL and method
 http_access deny  denied_urls
@@ -85,9 +91,11 @@ http_access deny  localnet api_github   write_methods
 http_access deny  localnet github_web   write_methods !git_fetch
 http_access deny  localnet npm_registry write_methods !npm_audit
 http_access deny  localnet pypi         write_methods
+http_access deny  headroom_src write_methods
 http_access allow localnet !CONNECT full_domains
 http_access allow localnet !CONNECT path_domains allowed_urls
 http_access allow litellm_leg litellm_src !CONNECT llm_api
+http_access allow headroom_leg headroom_src !CONNECT headroom_dl
 http_access deny all
 
 # Denial = 403 with a readable page (errors/ERR_ACCESS_DENIED) instead of

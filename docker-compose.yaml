@@ -197,11 +197,13 @@ services:
       as-net-litellm-egress: {}
     volumes:
       - ./litellm/litellm-config.yaml:/app/config.yaml:ro
-      - ./litellm/models:/app/models:ro      # one file per API endpoint (include: in the config)
+      - ./litellm/models:/app/models:ro      # one file per API endpoint, all included (run.sh)
+      - ./litellm/run.sh:/scripts/run.sh:ro  # config + include: of every models/*.yaml
       - ./ssl/squid-ca.crt:/certs/proxy-ca.crt:ro
       - ./litellm/logging.json:/app/logging.json:ro
       - ./litellm/logs:/var/log/litellm      # access.log: every request, rotated daily, 7 kept
-    command: ["--config", "/app/config.yaml", "--port", "4000", "--log_config", "/app/logging.json"]
+    entrypoint: ["/bin/sh", "/scripts/run.sh"]      # then the image's entrypoint, --config /tmp/config.yaml
+    command: ["--port", "4000", "--log_config", "/app/logging.json"]
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request,sys; sys.exit(0) if urllib.request.urlopen('http://127.0.0.1:4000/health/liveliness',timeout=4).status==200 else sys.exit(1)"]
       interval: 30s
@@ -239,10 +241,13 @@ services:
 
   # The agents' way to LiteLLM (llm.as.internal:4000): only the client-key routes,
   # without the response headers that describe the upstream (llm-gw/Caddyfile).
+  # Chat and messages go through as-headroom (compression), the rest straight to LiteLLM.
   as-llm-gw:
     image: ${CADDY_IMAGE:-caddy:2.8.4-alpine}
     container_name: as-llm-gw
     restart: unless-stopped
+    env_file:
+      - headroom/headroom.env        # HEADROOM_PROXY_TOKEN, sent to as-headroom
     user: "${LOGS_UID:-1000}:${LOGS_GID:-1000}"     # owner of llm-gw/logs on the host
     volumes:
       - ./llm-gw:/etc/caddy:ro       # Caddyfile (a directory: edits are seen)
@@ -251,12 +256,77 @@ services:
     dns: ["${DNS_IP}"]
     depends_on:
       as-dns: { condition: service_started }
+      as-headroom: { condition: service_started }
     networks:
       as-net-blind:
         aliases: [llm.as.internal]
     read_only: true
     cap_drop: [ALL]
     cap_add: [NET_BIND_SERVICE]      # the image's caddy binary carries this file capability
+    security_opt: ["no-new-privileges:true"]
+    logging: *bounded-logs
+
+# - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+  # Headroom (context compression): as-llm-gw sends chat and messages requests here,
+  # Headroom compresses tool outputs, logs and history and forwards them to LiteLLM with the
+  # client's own key. Only as-llm-gw holds the token it requires (headroom/headroom.env).
+  # Out: LiteLLM, and Squid's leg on as-net-headroom-egress for squid/conf/headroom_domains.txt
+  # (Hugging Face models, cached in headroom/data/hf); no beacon, telemetry or update check.
+  as-headroom:
+    image: ${HEADROOM_IMAGE:-ghcr.io/headroomlabs-ai/headroom:0.42.0}
+    container_name: as-headroom
+    restart: unless-stopped
+    user: "${LOGS_UID:-1000}:${LOGS_GID:-1000}"     # owner of headroom/data on the host
+    env_file:
+      - headroom/headroom.env        # HEADROOM_PROXY_TOKEN: required from every non-loopback caller
+    environment:
+      HEADROOM_HOST: 0.0.0.0
+      HEADROOM_PORT: "8787"
+      ANTHROPIC_TARGET_API_URL: http://litellm.as.internal:4000      # /v1/messages
+      OPENAI_TARGET_API_URL: http://litellm.as.internal:4000/v1      # /v1/chat/completions
+      # no egress of its own: beacon, local stats, update check, Anthropic quota poller
+      HEADROOM_BEACON: "off"
+      HEADROOM_TELEMETRY: "off"
+      DO_NOT_TRACK: "1"
+      HEADROOM_UPDATE_CHECK: "off"
+      HEADROOM_NO_SUBSCRIPTION_TRACKING: "1"
+      ORT_DISABLE_TELEMETRY: "1"
+      # no CCR: no headroom_retrieve tool injected into the clients' requests
+      HEADROOM_NO_CCR: "1"
+      # state and model cache on the host; the image's home is not writable here
+      HOME: /data
+      HEADROOM_WORKSPACE_DIR: /data/workspace
+      HF_HOME: /data/hf
+      # Hugging Face through Squid (its own leg); LiteLLM directly
+      HTTP_PROXY: &headroom-proxy http://hf-proxy.as.internal:3128
+      HTTPS_PROXY: *headroom-proxy
+      http_proxy: *headroom-proxy
+      https_proxy: *headroom-proxy
+      NO_PROXY: &headroom-no-proxy localhost,127.0.0.1,.as.internal
+      no_proxy: *headroom-no-proxy
+      # Squid bumps TLS: trust its CA (replaces the system CAs, like LiteLLM)
+      SSL_CERT_FILE: /certs/proxy-ca.crt
+      REQUESTS_CA_BUNDLE: /certs/proxy-ca.crt
+    # no rate limit (LiteLLM keys have their own), no semantic response cache (shared by all clients)
+    command: ["--no-rate-limit", "--no-cache"]
+    volumes:
+      - ./headroom/data:/data                       # workspace, Hugging Face cache
+      - ./ssl/squid-ca.crt:/certs/proxy-ca.crt:ro
+    tmpfs: [/tmp]
+    # Docker's embedded DNS answers hf-proxy.as.internal (as-net-headroom-egress), as-dns the rest
+    dns: ["${DNS_IP}"]
+    dns_search: [as.internal]
+    depends_on:
+      as-dns: { condition: service_started }
+      as-squid: { condition: service_healthy }
+      as-litellm: { condition: service_started }
+    networks:
+      as-net-blind:
+        aliases: [headroom.as.internal]
+      as-net-headroom-egress: {}
+    read_only: true
+    cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
     logging: *bounded-logs
 
@@ -333,6 +403,8 @@ services:
         ${LLM_EGRESS_SUBNET:?set it in .env (see .env.example)} ${SQUID_LOCALNET_EXTRA:-}
       # only the as-net-litellm-egress leg (LiteLLM) may reach squid/conf/llm_api_domains.txt
       SQUID_LITELLM_NET: ${LLM_EGRESS_SUBNET}
+      # only the as-net-headroom-egress leg (as-headroom) may reach squid/conf/headroom_domains.txt
+      SQUID_HEADROOM_NET: ${HEADROOM_EGRESS_SUBNET:?set it in .env (see .env.example)}
       # Squid resolves internet names itself, over its VLAN leg (dns_nameservers);
       # LAN hosts come from squid/conf/lan.hosts
       SQUID_DNS_UPSTREAM: ${SQUID_DNS_UPSTREAM:?set it in .env (see .env.example)}
@@ -347,6 +419,8 @@ services:
         aliases: [proxy.as.internal]
       as-net-litellm-egress:
         aliases: [llm-proxy.as.internal]
+      as-net-headroom-egress:
+        aliases: [hf-proxy.as.internal]
     sysctls: *no-forwarding
     volumes:
       # whole directory (not single files): edit + reload_squid.sh sees the new content
@@ -685,6 +759,10 @@ networks:
   as-net-litellm-egress:
     internal: true
     ipam: { config: [ { subnet: "${LLM_EGRESS_SUBNET:?set it in .env (see .env.example)}" } ] }
+  # as-headroom <-> Squid only (Hugging Face model downloads, headroom_domains.txt)
+  as-net-headroom-egress:
+    internal: true
+    ipam: { config: [ { subnet: "${HEADROOM_EGRESS_SUBNET:?set it in .env (see .env.example)}" } ] }
   as-net-litellm-db:
     internal: true                 # no gateway: does not take over the default route
     ipam: { config: [ { subnet: "${DB_SUBNET:?set it in .env (see .env.example)}" } ] }

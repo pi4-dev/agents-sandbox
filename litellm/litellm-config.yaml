@@ -1,8 +1,6 @@
-# Models are defined per provider in litellm/models/*.yaml (one file per API endpoint).
-# Adding a provider: litellm/models/README.md.
-include:
-  - models/claude-local.yaml
-  - models/openrouter.yaml
+# Settings only. The models are litellm/models/*.yaml (one file per API endpoint):
+# litellm/run.sh includes every file there at start, so a new file needs no edit here,
+# only `docker compose restart as-litellm`. Adding a provider: litellm/models/README.md.
 
 litellm_settings:
   drop_params: true

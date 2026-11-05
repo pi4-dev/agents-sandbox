@@ -10,7 +10,7 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-SERVICE_ENVS=(claude-main/claude claude-bridge/claude-bridge hermes/hermes litellm/litellm litellm/litellm-db open-webui/open-webui zenoh/zenoh claude-qwen/claude-qwen)
+SERVICE_ENVS=(claude-main/claude claude-bridge/claude-bridge hermes/hermes litellm/litellm litellm/litellm-db open-webui/open-webui zenoh/zenoh claude-qwen/claude-qwen headroom/headroom)
 
 if [ "${1:-}" = --examples ]; then mode=examples sfx=.example; else mode=local sfx=; fi
 fail=0
@@ -150,21 +150,18 @@ if [ -f "$he" ]; then
   fi
 fi
 
-# --- LiteLLM model sets: litellm/models/*.yaml pulled in by include: ---
+# --- LiteLLM model sets: every litellm/models/*.yaml (litellm/run.sh includes them all) ---
 cfg=litellm/litellm-config.yaml
 names=() vars=()
-while read -r inc; do
-  f=litellm/$inc
-  if [ ! -f "$f" ]; then err "$cfg includes $inc, which does not exist"; continue; fi
+for f in litellm/models/*.yaml; do
+  [ -f "$f" ] || continue
   while read -r n; do names+=("$n"); done < <(sed -nE 's/^[[:space:]]*-[[:space:]]*model_name:[[:space:]]*"?([^"#[:space:]]+)"?.*/\1/p' "$f")
   while read -r v; do vars+=("$v|$f"); done < <(grep -vE '^[[:space:]]*#' "$f" | grep -oE 'os\.environ/[A-Za-z0-9_]+' | sed 's#os.environ/##' | sort -u)
-done < <(sed -nE 's/^[[:space:]]*-[[:space:]]*(models\/[^[:space:]#]+).*/\1/p' "$cfg")
+done
 dups=$(printf '%s\n' "${names[@]}" | sort | uniq -d)
 [ -z "$dups" ] || err "model_name used in more than one place in litellm/models: $(echo "$dups" | tr '\n' ' ')"
-for f in litellm/models/*.yaml; do
-  grep -qE "^[[:space:]]*-[[:space:]]*models/$(basename "$f")([[:space:]]|$)" "$cfg" ||
-    echo "check-env: warning: $f is not under include: in $cfg (not loaded)" >&2
-done
+grep -qE '^include:' "$cfg" &&
+  echo "check-env: warning: $cfg has an include: block; it is ignored (litellm/run.sh includes every litellm/models/*.yaml), remove it" >&2
 if [ -f "$ll" ]; then
   for pair in "${vars[@]}"; do
     v=${pair%%|*} f=${pair#*|}
@@ -259,16 +256,21 @@ if [ $mode = local ]; then
   fi
 fi
 
-# --- access logs: as-dns, as-ingress and as-llm-gw run as LOGS_UID and write into these ---
+# --- access logs (and headroom/data): as-dns, as-ingress, as-llm-gw and as-headroom run as LOGS_UID ---
 if [ $mode = local ]; then
   luid=$(get .env LOGS_UID 2>/dev/null || true); luid=${luid:-1000}
-  for d in dns/logs ingress/logs llm-gw/logs litellm/logs; do
+  for d in dns/logs ingress/logs llm-gw/logs litellm/logs headroom/data; do
     if [ ! -d "$d" ]; then
       echo "check-env: warning: $d is missing; Docker would create it as root (run-first.sh creates it)" >&2
     elif [ "$d" != litellm/logs ] && [ "$(stat -c %u "$d")" != "$luid" ]; then
       echo "check-env: warning: $d is not owned by UID $luid (LOGS_UID), so its container cannot write the access log. Fix: sudo chown $luid $d" >&2
     fi
   done
+fi
+
+# --- squid/conf/squid.conf is your copy: the Headroom rules arrived later in the example ---
+if [ $mode = local ] && [ -f squid/conf/squid.conf ] && ! grep -qE '^[[:space:]]*http_access allow headroom_leg headroom_src' squid/conf/squid.conf; then
+  echo "check-env: warning: squid/conf/squid.conf has no headroom_leg rules, so as-headroom cannot download its models; take them over: diff -u squid/conf/squid.conf squid/conf/squid.conf.example" >&2
 fi
 
 # --- dns/local.d: a forward to anything but Docker's DNS reopens DNS as a way out ---

@@ -31,6 +31,7 @@ dns/logs/
 ingress/logs/
 llm-gw/logs/
 litellm/logs/
+headroom/data/
 **/__pycache__/
 **/.pytest_cache/
 node_modules/

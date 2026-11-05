@@ -38,7 +38,7 @@ for ex in squid/conf/*.example hermes/config.yaml.example hermes/managed.env.exa
   fi
 done
 
-FILES=(.env claude-main/claude.env claude-bridge/claude-bridge.env hermes/hermes.env litellm/litellm.env litellm/litellm-db.env open-webui/open-webui.env zenoh/zenoh.env claude-qwen/claude-qwen.env)
+FILES=(.env claude-main/claude.env claude-bridge/claude-bridge.env hermes/hermes.env litellm/litellm.env litellm/litellm-db.env open-webui/open-webui.env zenoh/zenoh.env claude-qwen/claude-qwen.env headroom/headroom.env)
 for f in "${FILES[@]}"; do
   if [ ! -f "$f" ]; then
     install -m 600 "$f.example" "$f"
@@ -60,6 +60,7 @@ declare -A GEN=(
   [CHANGE_ME_ZENOH_PASSWORD_HERMES]="$(hex 24)"
   [CHANGE_ME_ZENOH_PASSWORD_CLAUDE]="$(hex 24)"
   [CHANGE_ME_ZENOH_PASSWORD_CLAUDE_QWEN]="$(hex 24)"
+  [CHANGE_ME_HEADROOM_PROXY_TOKEN]="$(hex 32)"
 )
 
 # existing <ph>: the value already set elsewhere for the key(s) holding placeholder <ph>

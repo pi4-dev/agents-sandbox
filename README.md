@@ -19,7 +19,8 @@ Docker Compose homelab for AI coding agents with a shared LiteLLM API, an HTTPS-
 | `as-litellm` | Shared API routing to LLM models |
 | `as-litellm-keys` | One-shot job: registers the pre-generated client keys in LiteLLM |
 | `as-zenoh` | Message bus of the agents (Zenoh router, `zenoh.as.internal:7447`): a login and an ACL per system, every message logged to `zenoh/logs/` on the host |
-| `as-llm-gw` | The agents' way to LiteLLM (Caddy, `llm.as.internal:4000`): only the client-key routes, without the response headers that describe the upstream |
+| `as-llm-gw` | The agents' way to LiteLLM (Caddy, `llm.as.internal:4000`): only the client-key routes, without the response headers that describe the upstream; chat and messages through `as-headroom` |
+| `as-headroom` | Context compression ([Headroom](https://github.com/headroomlabs-ai/headroom)) between `as-llm-gw` and LiteLLM: tool outputs, logs, JSON and history shrink before they reach the model; Hugging Face models through its own Squid leg |
 | `as-litellm-db` | PostgreSQL on a Docker `internal` network |
 | `as-open-webui` | Web UI for models |
 
@@ -42,7 +43,8 @@ claude-qwen/                   Claude Code on a LiteLLM model: environment examp
 claude-bridge/                 Claude bridge: server.mjs, its image and environment example (home/, workspace/: runtime)
 hermes/                        Hermes configuration (config.yaml.example), managed settings (managed.env.example), persona (SOUL.md.example), environment example
 fw/                            Network namespace firewall rules (fw.sh)
-litellm/                       LiteLLM model/database configuration, access log config (logging.json) and log (logs/)
+litellm/                       LiteLLM settings (litellm-config.yaml), models (models/*.yaml, all loaded by run.sh), database config, access log config (logging.json) and log (logs/)
+headroom/                      as-headroom: token (headroom.env.example), workspace and model cache (data/: runtime)
 llm-gw/                        as-llm-gw config (Caddyfile): the agents' routes to LiteLLM; access log (logs/)
 zenoh/                         as-zenoh: router config and start script (conf/), logins (zenoh.env.example), message log (logs/)
 open-webui/                    Web UI environment example
@@ -79,7 +81,7 @@ In short:
 - **LiteLLM reaches Squid over its own network** (`as-net-litellm-egress`, `llm-proxy.as.internal`). Squid serves the LLM provider APIs (`llm_api_domains.txt`) and LAN hosts (`lan.hosts`) only on that leg, so the identity is network membership, not an address an agent could forge.
 - **Dashboard** at `http://<INGRESS_IP>/` (`:80`, only from `INGRESS_DASHBOARD_ALLOW_FROM`): links to every published GUI, with a dot showing whether your browser reaches its port. Caddy builds the list on each request from the `# @dashboard <name> | <description> | <path>` lines in `ingress/Caddyfile`, so a new site with such a line shows up after `docker compose restart as-ingress`. Every path serves the dashboard; the Caddyfile itself is not served.
 - **GUIs through `as-ingress`** on `INGRESS_IP`, one port per GUI: Open WebUI `:8080`, LiteLLM `:4000` (API and `/ui`), Hermes dashboard `:9119` (only from `HERMES_DASHBOARD_ALLOW_FROM`). Caddy listens on its VLAN leg only.
-- **Names, not addresses.** Every service is reached by a `*.as.internal` name (`proxy`, `litellm`, `llm`, `zenoh`, `claude-bridge`, `hermes`, `open-webui`, `netshoot`, `dns`, `ingress`, `dev-ws01`). They are Docker network aliases in `docker-compose.yaml`, and Docker assigns the addresses (`BLIND_IP_RANGE`). Fixed addresses are only the VLAN legs (`PROXY_IP`, `INGRESS_IP`) and `DNS_IP`, all in `.env`; LAN hosts are in `squid/conf/lan.hosts`. `check-env.sh` rejects literal IPs anywhere else.
+- **Names, not addresses.** Every service is reached by a `*.as.internal` name (`proxy`, `litellm`, `llm`, `headroom`, `zenoh`, `claude-bridge`, `hermes`, `open-webui`, `netshoot`, `dns`, `ingress`, `dev-ws01`). They are Docker network aliases in `docker-compose.yaml`, and Docker assigns the addresses (`BLIND_IP_RANGE`). Fixed addresses are only the VLAN legs (`PROXY_IP`, `INGRESS_IP`) and `DNS_IP`, all in `.env`; LAN hosts are in `squid/conf/lan.hosts`. `check-env.sh` rejects literal IPs anywhere else.
 - **`as-dns`** (CoreDNS) asks Docker's embedded DNS for `*.as.internal` and keeps one log of every DNS query in `as-net-blind` (`dns/logs/`, also `docker compose logs as-dns`).
   - Any other name gets NXDOMAIN on the spot. Nothing is forwarded out: `as-dns` sits only on the internal network, where Docker forwards no query to an outside resolver (CI-tested), so DNS cannot carry data out (subdomain tunneling).
   - Internet names are resolved by Squid itself, over its VLAN leg (`SQUID_DNS_UPSTREAM`), and only for requests that passed its ACLs.
@@ -135,16 +137,18 @@ In short:
 
 ### Changing addressing
 
-Edit `.env` only (`VLAN_*`, `PROXY_IP`, `INGRESS_IP`, `BLIND_*`, `DNS_IP`, `LLM_EGRESS_SUBNET`, `DB_SUBNET`, `SQUID_LOCALNET_EXTRA`), then `docker compose up -d`. Names, Squid's `localnet`, firewall rules and all clients follow, because everything else uses names. Hosts outside the stack live in `squid/conf/lan.hosts` (after an edit: `squid/reload_squid.sh`).
+Edit `.env` only (`VLAN_*`, `PROXY_IP`, `INGRESS_IP`, `BLIND_*`, `DNS_IP`, `LLM_EGRESS_SUBNET`, `HEADROOM_EGRESS_SUBNET`, `DB_SUBNET`, `SQUID_LOCALNET_EXTRA`), then `docker compose up -d`. Names, Squid's `localnet`, firewall rules and all clients follow, because everything else uses names. Hosts outside the stack live in `squid/conf/lan.hosts` (after an edit: `squid/reload_squid.sh`).
 
 ### Models (LiteLLM)
 
-- **One file per API endpoint** in `litellm/models/`, pulled in by `include:` in
-  `litellm/litellm-config.yaml`:
+- **One file per API endpoint** in `litellm/models/`. `litellm/run.sh` (the entrypoint
+  of `as-litellm`) builds the config at start: `litellm/litellm-config.yaml` (settings only)
+  plus an `include:` of every `litellm/models/*.yaml`. An `include:` block left in your
+  `litellm-config.yaml` is ignored (`check-env.sh` warns):
   - `claude-local.yaml`: `claude-sub`, the local Claude bridge;
   - `openrouter.yaml`: OpenRouter examples `openrouter-gpt-oss-20b` and `openrouter-nvidia-nemotron-3.5-lightning:free`.
 - **Adding an endpoint and its models:**
-  1. a new file plus one `include:` line;
+  1. a new file, then `docker compose restart as-litellm` (no config edit);
   2. its key in `litellm/litellm.env` (placeholder in the example);
   3. for internet APIs, its host in `squid/conf/llm_api_domains.txt`; for a LAN
      server, a `<name>.lan.internal` line in `squid/conf/lan.hosts`.
@@ -153,6 +157,50 @@ Edit `.env` only (`VLAN_*`, `PROXY_IP`, `INGRESS_IP`, `BLIND_*`, `DNS_IP`, `LLM_
 - **Provider APIs and LAN hosts are reachable through Squid from LiteLLM's network only**
   (`as-net-litellm-egress`). An agent with someone else's API key cannot send data to
   that provider's account.
+
+### Context compression (`as-headroom`)
+
+[Headroom](https://github.com/headroomlabs-ai/headroom) (`HEADROOM_IMAGE`, default
+`ghcr.io/headroomlabs-ai/headroom:0.42.0`) sits between `as-llm-gw` and LiteLLM:
+
+```text
+Hermes, Claude on Qwen -> as-llm-gw -> as-headroom:8787 -> as-litellm:4000
+                                    \-> as-litellm:4000   (count_tokens, models, completions)
+```
+
+- **What goes through it:** `/v1/chat/completions`, `/chat/completions` and `/v1/messages`
+  (`@compressed` in `llm-gw/Caddyfile`). Headroom compresses tool outputs, JSON, logs and
+  history and forwards the request with the client's own LiteLLM key, so keys, routes and
+  budgets in LiteLLM stay as they are. Clients that use LiteLLM directly (Open WebUI,
+  admins) and the Claude agent (`as-claude-main`, its own Anthropic login) are not
+  affected.
+- **Settings** (`docker-compose.yaml`): mode `cache` (Headroom's default: earlier turns stay
+  byte-identical, so the provider's prompt cache keeps working), no CCR (no
+  `headroom_retrieve` tool added to the requests; compression is not reversible by the
+  model), no rate limit (LiteLLM's keys have their own), no shared response cache.
+- **Access:** Headroom listens on `as-net-blind` only with `HEADROOM_PROXY_TOKEN`
+  (`headroom/headroom.env`, generated by `gen-secrets.sh`); only `as-llm-gw` has it and adds
+  it as `X-Headroom-Proxy-Token`, after dropping every `X-Headroom-*` header of the client
+  (`x-headroom-base-url` would choose Headroom's upstream). Responses lose `x-headroom-*`.
+- **Egress:** none of its own (beacon, local telemetry, update check and the Anthropic quota
+  poller are off). Its models (Kompress, the content router) and the tiktoken vocabulary
+  come from `squid/conf/headroom_domains.txt` (`.huggingface.co`, `.hf.co`,
+  `openaipublic.blob.core.windows.net`), read-only, through Squid's leg on
+  `as-net-headroom-egress` (`hf-proxy.as.internal`, `HEADROOM_EGRESS_SUBNET`). No agent and
+  not LiteLLM can use that list, and Headroom cannot use the agents' or LiteLLM's lists
+  through that leg. Downloaded once into `headroom/data/hf`. Without them Headroom falls
+  back to rule-based compression.
+- **State:** `headroom/data` (owner `LOGS_UID`, `run-first.sh` creates it): workspace and
+  model cache. The container is read-only, without capabilities, not root.
+- **Savings:** `docker compose logs as-headroom | grep PERF` (tokens before/after per request).
+  In tests Headroom 0.42.0 compressed a repetitive tool output on the chat path by about
+  half and left the same content on the Anthropic path (`/v1/messages`) unchanged.
+- **Like LiteLLM, it has no firewall sidecar:** on `as-net-blind` it could reach other
+  services and Squid's agent leg (`proxy.as.internal`, the agents' allowlist).
+- **Rollback:** in `llm-gw/Caddyfile` point `@compressed` at `litellm.as.internal:4000`
+  (or delete the `handle @compressed` block), then `docker compose restart as-llm-gw`.
+- **Tests:** `tests/headroom/run-headroom-tests.sh` (gateway, Headroom, real LiteLLM),
+  `tests/squid/run-acl-tests.sh` (its Squid leg), `tests/compose/run-blind-tests.sh`.
 
 ### LiteLLM keys
 

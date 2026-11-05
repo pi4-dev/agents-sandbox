@@ -25,13 +25,17 @@ LLM_NET=172.31.251.0/24    # LLM_EGRESS_SUBNET: LiteLLM <-> Squid only
 CLIENT_IP=172.31.250.130   # agent address inside localnet (as-net-blind)
 LLM_LEG=172.31.251.2       # Squid's own address on as-net-litellm-egress
 LITELLM_IP=172.31.251.10   # LiteLLM on as-net-litellm-egress: the only client of llm_api_domains.txt
+HR_NET=172.31.252.0/24     # HEADROOM_EGRESS_SUBNET: as-headroom <-> Squid only
+HR_LEG=172.31.252.2        # Squid's own address on as-net-headroom-egress
+HEADROOM_IP=172.31.252.10  # as-headroom: the only client of headroom_domains.txt
 OUTSIDE_IP=172.31.1.10     # inside a /16 around the networks, outside both /24s
 PTR_IP=127.0.0.2           # address whose reverse name is an allowlisted host
 BADCERT_IP=127.0.0.3       # upstream with a certificate Squid does not trust
 NAMES=(api.anthropic.com claude.ai claude.com platform.claude.com statsig.anthropic.com
        code.claude.com github.com api.github.com raw.githubusercontent.com
        objects.githubusercontent.com ftp.pl.debian.org security.debian.org evil.example.com
-       openrouter.ai llm.lan.internal pypi.org files.pythonhosted.org upload.pypi.org)
+       openrouter.ai llm.lan.internal pypi.org files.pythonhosted.org upload.pypi.org
+       huggingface.co cdn-lfs.hf.co cas-bridge.xethub.hf.co openaipublic.blob.core.windows.net)
 
 [ "$(id -u)" = 0 ] || { echo "run-acl-tests: run as root" >&2; exit 2; }
 
@@ -50,6 +54,8 @@ cleanup() {
   ip addr del "$OUTSIDE_IP/32" dev lo 2>/dev/null || true
   ip addr del "$LITELLM_IP/32" dev lo 2>/dev/null || true
   ip addr del "$LLM_LEG/32" dev lo 2>/dev/null || true
+  ip addr del "$HEADROOM_IP/32" dev lo 2>/dev/null || true
+  ip addr del "$HR_LEG/32" dev lo 2>/dev/null || true
   rm -rf "$W"
 }
 trap cleanup EXIT
@@ -58,6 +64,7 @@ trap cleanup EXIT
 mkdir -p "$W/etc/conf" "$W/etc/errors" "$W/etc/ssl" "$W/lib" "$W/log"
 printf '%s\n' "$BLIND_NET" "$LLM_NET" >"$W/lib/localnet.txt"  # what entrypoint.sh writes from SQUID_LOCALNET
 echo "$LLM_NET" >"$W/lib/litellm_net.txt"                     # ... from SQUID_LITELLM_NET
+echo "$HR_NET" >"$W/lib/headroom_net.txt"                     # ... from SQUID_HEADROOM_NET
 echo "dns_nameservers 127.0.0.1" >"$W/lib/dns.conf"            # ... from SQUID_DNS_UPSTREAM
 if [ $EXAMPLES = 1 ]; then
   for f in "$CONF_DIR"/*.example; do cp "$f" "$W/etc/conf/$(basename "${f%.example}")"; done
@@ -114,6 +121,8 @@ ip addr add "$CLIENT_IP/32" dev lo 2>/dev/null || true
 ip addr add "$OUTSIDE_IP/32" dev lo 2>/dev/null || true
 ip addr add "$LITELLM_IP/32" dev lo 2>/dev/null || true
 ip addr add "$LLM_LEG/32" dev lo 2>/dev/null || true
+ip addr add "$HEADROOM_IP/32" dev lo 2>/dev/null || true
+ip addr add "$HR_LEG/32" dev lo 2>/dev/null || true
 
 python3 "$REPO/tests/squid/upstream.py" --addr 127.0.0.1 --addr "$PTR_IP" \
   --cert "$W/upstream.crt" --key "$W/upstream.key" &
@@ -227,6 +236,25 @@ PROXY_ADDR=$L check deny "agent via LiteLLM's leg -> LLM provider API" POST http
 PROXY_ADDR=$L check deny "agent via LiteLLM's leg -> LAN host"         GET  http://llm.lan.internal:8000/v1/models
 # a source address from LiteLLM's network arriving on the agents' leg (forged source)
 check deny  "LiteLLM network on the agents' leg"   POST   https://openrouter.ai/api/v1/chat/completions --interface "$LITELLM_IP"
+# as-headroom = its own leg (HR_LEG) and network: headroom_domains.txt, read-only, nothing else
+H=$HR_LEG
+PROXY_ADDR=$H check allow "Headroom -> huggingface.co (model files)"     GET  https://huggingface.co/chopratejas/kompress-v2-base/resolve/main/config.json --interface "$HEADROOM_IP"
+PROXY_ADDR=$H check allow "Headroom -> cdn-lfs.hf.co (redirect target)"  GET  https://cdn-lfs.hf.co/repos/x/y --interface "$HEADROOM_IP"
+PROXY_ADDR=$H check allow "Headroom -> cas-bridge.xethub.hf.co"          GET  https://cas-bridge.xethub.hf.co/xet-bridge-us/x --interface "$HEADROOM_IP"
+PROXY_ADDR=$H check allow "Headroom -> tiktoken vocabulary"              GET  https://openaipublic.blob.core.windows.net/encodings/cl100k_base.tiktoken --interface "$HEADROOM_IP"
+PROXY_ADDR=$H check deny  "Headroom -> huggingface.co POST (upload)"     POST https://huggingface.co/api/repos/create --interface "$HEADROOM_IP"
+PROXY_ADDR=$H check deny  "Headroom -> huggingface.co PUT"               PUT  https://huggingface.co/api/x --interface "$HEADROOM_IP"
+PROXY_ADDR=$H check deny  "Headroom -> shared allowlist"                 GET  https://api.anthropic.com/v1/models --interface "$HEADROOM_IP"
+PROXY_ADDR=$H check deny  "Headroom -> LLM provider API"                 POST https://openrouter.ai/api/v1/chat/completions --interface "$HEADROOM_IP"
+PROXY_ADDR=$H check deny  "Headroom -> LAN host"                         GET  http://llm.lan.internal:8000/v1/models --interface "$HEADROOM_IP"
+PROXY_ADDR=$H check deny  "Headroom -> domain not on any list"           GET  https://evil.example.com/ --interface "$HEADROOM_IP"
+PROXY_ADDR=$H check deny  "Headroom -> /cdn-cgi/ on huggingface.co"      GET  https://huggingface.co/cdn-cgi/trace --interface "$HEADROOM_IP"
+check deny  "agent -> huggingface.co"              GET    https://huggingface.co/chopratejas/kompress-v2-base/resolve/main/config.json
+PROXY_ADDR=$L check deny "LiteLLM -> huggingface.co" GET https://huggingface.co/x --interface "$LITELLM_IP"
+# an agent that routes to Squid's Headroom leg; Headroom's network on the agents' leg
+PROXY_ADDR=$H check deny "agent via Headroom's leg -> huggingface.co"   GET  https://huggingface.co/x
+check deny  "Headroom network on the agents' leg"  GET    https://huggingface.co/x --interface "$HEADROOM_IP"
+check deny  "Headroom network on the agents' leg (allowlist)" GET https://api.anthropic.com/v1/models --interface "$HEADROOM_IP"
 
 # the deny page must say that the proxy policy blocked the request
 page=$(curl -sS --max-time 10 --proxy http://127.0.0.1:3128 --noproxy '' --interface "$CLIENT_IP" \

@@ -9,6 +9,12 @@
 # - Drops the response headers that describe the upstream: llm_provider-* (LiteLLM
 #   forwards every provider header under that prefix and has no setting to stop it) and
 #   x-litellm-model-* (api_base, the deployment's real model name and id).
+# - Chat and messages (/v1/chat/completions, /chat/completions, /v1/messages) go through
+#   as-headroom (headroom.as.internal:8787), which compresses them and forwards them to
+#   LiteLLM with the client's key; the other routes go to LiteLLM directly. Every
+#   X-Headroom-* header from the client is dropped (x-headroom-base-url would pick
+#   Headroom's upstream), then the token from headroom/headroom.env is added. Responses
+#   lose x-headroom-* too. Rollback: point @compressed at litellm.as.internal:4000.
 # - Error bodies pass unchanged.
 #
 # Access log (JSON, Authorization redacted): llm-gw/logs/access.log, rolled at 10 MiB,
@@ -29,6 +35,18 @@
 		}
 	}
 	@client_routes path /v1/chat/completions /chat/completions /v1/completions /completions /v1/messages /v1/messages/count_tokens /v1/models /models
+	@compressed path /v1/chat/completions /chat/completions /v1/messages
+	# handle blocks are tried in this order; the first match wins
+	handle @compressed {
+		request_header -X-Headroom-*
+		reverse_proxy headroom.as.internal:8787 {
+			# after request_header: header_up deletions would run after this set
+			header_up X-Headroom-Proxy-Token {$HEADROOM_PROXY_TOKEN}
+			header_down -llm_provider-*
+			header_down -x-litellm-model-*
+			header_down -x-headroom-*
+		}
+	}
 	handle @client_routes {
 		reverse_proxy litellm.as.internal:4000 {
 			header_down -llm_provider-*

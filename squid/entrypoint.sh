@@ -25,6 +25,9 @@ printf '%s\n' $SQUID_LOCALNET >/var/lib/squid/localnet.txt
 # LiteLLM's network (as-net-litellm-egress): the only leg allowed to reach llm_api_domains.txt
 : "${SQUID_LITELLM_NET:?entrypoint: SQUID_LITELLM_NET is not set}"
 printf '%s\n' "$SQUID_LITELLM_NET" >/var/lib/squid/litellm_net.txt
+# as-headroom's network (as-net-headroom-egress): the only leg allowed to reach headroom_domains.txt
+: "${SQUID_HEADROOM_NET:?entrypoint: SQUID_HEADROOM_NET is not set}"
+printf '%s\n' "$SQUID_HEADROOM_NET" >/var/lib/squid/headroom_net.txt
 # resolvers for internet names (Squid asks them directly, over its VLAN leg)
 : "${SQUID_DNS_UPSTREAM:?entrypoint: SQUID_DNS_UPSTREAM is not set}"
 echo "dns_nameservers $SQUID_DNS_UPSTREAM" >/var/lib/squid/dns.conf

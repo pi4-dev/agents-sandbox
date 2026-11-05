@@ -65,10 +65,11 @@ def aliases(name, net):
 
 
 # --- topology: as-net-blind has no route out; only the gateways touch the VLAN ---
-for net in ["as-net-blind", "as-net-litellm-egress", "as-net-litellm-db"]:
+for net in ["as-net-blind", "as-net-litellm-egress", "as-net-litellm-db", "as-net-headroom-egress"]:
     check(nets[net].get("internal") is True, f"network {net}: internal (no route out)")
 check(members("as-net-vlan") == ["as-ingress", "as-squid"], f"as-net-vlan: only as-squid and as-ingress {members('as-net-vlan')}")
 check(members("as-net-litellm-egress") == ["as-litellm", "as-squid"], f"as-net-litellm-egress: only LiteLLM and Squid {members('as-net-litellm-egress')}")
+check(members("as-net-headroom-egress") == ["as-headroom", "as-squid"], f"as-net-headroom-egress: only Headroom and Squid {members('as-net-headroom-egress')}")
 check(list(svc["as-dns"]["networks"]) == ["as-net-blind"], "as-dns: only on as-net-blind (Docker forwards none of its queries)")
 for name in ["as-squid", "as-ingress"]:
     sc = svc[name].get("sysctls") or {}
@@ -315,6 +316,55 @@ check(re.search(r"(?m)^\s*reverse_proxy litellm\.as\.internal:4000 \{", gw_cfg) 
       "as-llm-gw: those routes to LiteLLM, everything else a 404")
 check(re.search(r"(?m)^\s*header_down -llm_provider-\*\s*$", gw_cfg) and re.search(r"(?m)^\s*header_down -x-litellm-model-\*\s*$", gw_cfg),
       "as-llm-gw: drops the llm_provider-* and x-litellm-model-* response headers")
+# --- as-headroom: compression between as-llm-gw and LiteLLM ---
+hr, hre = svc["as-headroom"], env["as-headroom"]
+check(re.search(r"^ghcr\.io/headroomlabs-ai/headroom:\d+\.\d+\.\d+$", hr.get("image", "")) is not None,
+      f"as-headroom: pinned image version ({hr.get('image')})")
+check(sorted(hr.get("networks", {})) == ["as-net-blind", "as-net-headroom-egress"]
+      and aliases("as-headroom", "as-net-blind") == ["headroom.as.internal"],
+      "as-headroom: on as-net-blind (headroom.as.internal) and its own egress network")
+check("hf-proxy.as.internal" in aliases("as-squid", "as-net-headroom-egress")
+      and hre.get("HTTPS_PROXY") == "http://hf-proxy.as.internal:3128" and ".as.internal" in hre.get("NO_PROXY", ""),
+      "as-headroom: internet only through Squid's Headroom leg, LiteLLM directly")
+check(env["as-squid"].get("SQUID_HEADROOM_NET") == nets["as-net-headroom-egress"]["ipam"]["config"][0]["subnet"]
+      and nets["as-net-headroom-egress"]["ipam"]["config"][0]["subnet"] not in env["as-squid"].get("SQUID_LOCALNET", ""),
+      "as-squid: Headroom's network is its own ACL (headroom_domains.txt), not in localnet")
+check(hre.get("HEADROOM_HOST") == "0.0.0.0" and hre.get("HEADROOM_PROXY_TOKEN") and "HEADROOM_ALLOW_UNAUTHENTICATED_BIND" not in hre,
+      "as-headroom: listens on as-net-blind only with HEADROOM_PROXY_TOKEN")
+check(hre.get("ANTHROPIC_TARGET_API_URL") == "http://litellm.as.internal:4000"
+      and hre.get("OPENAI_TARGET_API_URL") == "http://litellm.as.internal:4000/v1",
+      "as-headroom: forwards to LiteLLM")
+check(hre.get("HEADROOM_BEACON") == "off" and hre.get("HEADROOM_TELEMETRY") == "off" and hre.get("DO_NOT_TRACK") == "1"
+      and hre.get("HEADROOM_UPDATE_CHECK") == "off" and hre.get("HEADROOM_NO_SUBSCRIPTION_TRACKING") == "1",
+      "as-headroom: no beacon, telemetry, update check or quota poller")
+hr_cmd = hr.get("command") or []
+check("--no-cache" in hr_cmd and "--no-rate-limit" in hr_cmd and hre.get("HEADROOM_NO_CCR") == "1",
+      "as-headroom: no shared response cache, no rate limit, no injected retrieve tool")
+check(hr.get("read_only") is True and hr.get("cap_drop") == ["ALL"] and "no-new-privileges:true" in (hr.get("security_opt") or [])
+      and not str(hr.get("user", "")).startswith("0"),
+      "as-headroom: read-only, no capabilities, not root")
+check(env["as-llm-gw"].get("HEADROOM_PROXY_TOKEN") == hre.get("HEADROOM_PROXY_TOKEN"),
+      "as-llm-gw: holds the same Headroom token (headroom/headroom.env)")
+gw_code = "\n".join(l for l in gw_cfg.splitlines() if not l.lstrip().startswith("#"))
+comp = re.search(r"(?m)^\s*@compressed path (.+)$", gw_code)
+check(comp and sorted(comp.group(1).split()) == ["/chat/completions", "/v1/chat/completions", "/v1/messages"]
+      and set(comp.group(1).split()) <= set(key_routes),
+      "as-llm-gw: chat and messages go through Headroom (a subset of the client routes)")
+hblock = re.search(r"handle @compressed \{(.*?)\n\t\}", gw_code, re.S)
+hb = hblock.group(1) if hblock else ""
+check(gw_code.index("handle @compressed") < gw_code.index("handle @client_routes")
+      and re.search(r"request_header -X-Headroom-\*", hb) and "reverse_proxy headroom.as.internal:8787" in hb
+      and re.search(r"header_up X-Headroom-Proxy-Token \{\$HEADROOM_PROXY_TOKEN\}", hb)
+      and re.search(r"header_down -x-headroom-\*", hb) and re.search(r"header_down -llm_provider-\*", hb),
+      "as-llm-gw: Headroom route drops the client's X-Headroom-* headers, adds the token, strips the response headers")
+# --- as-litellm: the config gets every litellm/models/*.yaml (litellm/run.sh) ---
+ll = svc["as-litellm"]
+ll_mounts = {v["target"]: v for v in ll["volumes"]}
+check(ll.get("entrypoint") == ["/bin/sh", "/scripts/run.sh"] and ll_mounts.get("/scripts/run.sh", {}).get("read_only") is True
+      and ll_mounts.get("/app/models", {}).get("read_only") is True and "--config" not in (ll.get("command") or []),
+      "as-litellm: started by litellm/run.sh (config + every models/*.yaml)")
+check(not re.search(r"(?m)^include:", open("litellm/litellm-config.yaml").read()),
+      "litellm/litellm-config.yaml: no include: (run.sh includes litellm/models/*.yaml)")
 check(env["as-hermes-net"].get("ALLOW_IN") == "tcp:9119:ingress.as.internal any::netshoot.as.internal",
       "as-hermes-net: dashboard reachable only from as-ingress")
 ing = svc["as-ingress"]

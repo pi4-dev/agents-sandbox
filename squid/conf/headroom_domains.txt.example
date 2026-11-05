@@ -1,0 +1,10 @@
+# Reachable only from as-headroom, over Squid's leg on as-net-headroom-egress
+# (hf-proxy.as.internal), read-only (GET/HEAD). Not for the agents, not for LiteLLM.
+# A leading dot also matches every subdomain. After an edit: squid/reload_squid.sh
+#
+# Hugging Face: Headroom's compression models (Kompress, the content router), downloaded
+# once into headroom/data/hf; huggingface.co redirects the files to *.hf.co
+.huggingface.co
+.hf.co
+# tiktoken vocabulary for token counts, downloaded once
+openaipublic.blob.core.windows.net
