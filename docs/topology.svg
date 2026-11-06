@@ -1,5 +1,5 @@
 <!-- agents-sandbox topology. Source of truth: docker-compose.yaml; keep in sync with docs/NETWORK.md. -->
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 900" aria-label="Topology: router/firewall, as-net-vlan with as-ingress and as-squid, as-net-blind with agents behind firewall sidecars, LiteLLM, the agents' gateway as-llm-gw, the message bus as-zenoh, Open WebUI and as-dns, as-net-litellm-egress between LiteLLM and Squid, as-net-litellm-db with the database">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 900" aria-label="Topology: router/firewall, as-net-vlan with as-ingress and as-squid, as-net-blind with agents behind firewall sidecars, LiteLLM, the agents' gateway as-llm-gw with the compression proxy as-headroom (its own leg to Squid for Hugging Face), the message bus as-zenoh, Open WebUI and as-dns, as-net-litellm-egress between LiteLLM and Squid, as-net-litellm-db with the database">
         <title>agents-sandbox topology</title>
         <style>
 svg {
@@ -107,7 +107,7 @@ text { font-family: var(--f-body); fill: var(--fg); }
         <line class="e-in" x1="230" y1="372" x2="230" y2="418" marker-end="url(#a-in)"/>
         <text class="t-edge c-in" x="239" y="400">by *.as.internal name</text>
         <line class="e-proxy" x1="710" y1="420" x2="710" y2="374" marker-end="url(#a-proxy)"/>
-        <text class="t-edge c-proxy" x="719" y="400">:3128 proxy.as.internal</text>
+        <text class="t-edge c-proxy" x="701" y="400" text-anchor="end">:3128 proxy.as.internal</text>
 
         <!-- no route out -->
         <line class="e-block" x1="470" y1="420" x2="470" y2="258"/>
@@ -180,13 +180,20 @@ text { font-family: var(--f-body); fill: var(--fg); }
 
         <!-- Open WebUI -> LiteLLM :4000, directly -->
         <path class="e-proxy" d="M115 560 L115 606 L640 606 L640 665 L698 665" marker-end="url(#a-proxy)"/>
-        <text class="t-edge c-proxy" x="606" y="600">:4000</text>
-        <!-- Hermes -> as-llm-gw (client routes, no upstream headers) -> LiteLLM :4000 -->
-        <path class="e-proxy" d="M285 560 L285 580 L398 580" marker-end="url(#a-proxy)"/>
-        <rect class="gw" x="400" y="567" width="200" height="26" rx="6"/>
-        <text class="t-mono" x="500" y="584" text-anchor="middle" style="fill:var(--fg)">as-llm-gw · llm.as.internal</text>
-        <path class="e-proxy" d="M600 580 L760 580 L760 618" marker-end="url(#a-proxy)"/>
-        <text class="t-edge c-proxy" x="768" y="604">:4000</text>
+        <text class="t-edge c-proxy" x="600" y="621">:4000</text>
+        <!-- Hermes -> as-llm-gw (client routes, no upstream headers) -> as-headroom (chat, messages) -> LiteLLM :4000 -->
+        <path class="e-proxy" d="M285 560 L285 580 L390 580" marker-end="url(#a-proxy)"/>
+        <rect class="gw" x="392" y="567" width="178" height="26" rx="6"/>
+        <text class="t-mono" x="481" y="584" text-anchor="middle" style="fill:var(--fg);font-size:10.5px">as-llm-gw · llm.as.internal</text>
+        <line class="e-proxy" x1="570" y1="580" x2="586" y2="580" marker-end="url(#a-proxy)"/>
+        <rect class="gw" x="588" y="567" width="150" height="26" rx="6" style="stroke:var(--c-llm)"/>
+        <text class="t-mono" x="663" y="584" text-anchor="middle" style="fill:var(--fg);font-size:10.5px">as-headroom :8787</text>
+        <line class="e-proxy" x1="720" y1="593" x2="720" y2="618" marker-end="url(#a-proxy)"/>
+        <text class="t-edge c-proxy" x="726" y="611">:4000</text>
+        <!-- as-headroom -> Squid over its own network (as-net-headroom-egress, hf-proxy.as.internal): Hugging Face only -->
+        <path class="e-llm" d="M738 580 L767 580 L767 410 L790 410 L790 376" marker-end="url(#a-proxy)" style="stroke-dasharray:6 3"/>
+        <text class="t-edge c-llm" x="798" y="392">as-net-headroom-egress</text>
+        <text class="t-mono" x="798" y="408">hf-proxy: Hugging Face only</text>
         <!-- LiteLLM -> bridge -->
         <line class="e-proxy" x1="870" y1="620" x2="870" y2="562" marker-end="url(#a-proxy)"/>
         <text class="t-edge c-proxy" x="879" y="600">:9090</text>
