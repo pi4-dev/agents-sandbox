@@ -132,6 +132,7 @@ In short:
    `run-first.sh` creates them and `check-env.sh` checks them against `PUID`. It must
    also read `hermes/managed.env`, or Hermes does not start; `check-env.sh` warns.
 5. Create the proxy CA: `ssl/init_ca.sh` (needs `sudo` to hand the key to UID 13).
+   `check-env.sh` fails without it ([Proxy CA](#proxy-ca)).
 6. Validate: `tests/compose/validate.sh`, then `docker compose config -q` with your real files.
 7. Start: `./run-first.sh` (or `./check-env.sh && docker compose up -d`), then the agent
    sessions: `./start-claude-main.sh` (Claude agent), `./start-claude-qwen.sh` (Claude on Qwen).
@@ -341,7 +342,7 @@ Qwen are on it (`ALLOW_OUT` of their sidecars); the Claude bridge is not.
   - The hash stays in single quotes: Compose expands the `$` in it otherwise. `check-env.sh` checks the quoting and the format.
   - An older `hermes.env` with `HERMES_DASHBOARD_BASIC_AUTH_PASSWORD` and `HERMES_DASHBOARD_BASIC_AUTH_SECRET`: replace both lines with the placeholder line above and run `./gen-secrets.sh`. `check-env.sh` warns until then, and fails while the plaintext password and the hash are both set (the plaintext wins).
 - **Hermes trusts the proxy CA.** Squid bumps all TLS, so at every start an s6 hook (`hermes/ca-trust.sh` as `/etc/cont-init.d/00-proxy-ca`, run as root before Hermes) adds `ssl/squid-ca.crt` to the system store: curl, git, OpenSSL and Hermes' own clients (truststore) use it. `SSL_CERT_FILE` and `REQUESTS_CA_BUNDLE` (the system bundle) cover Python libraries with their own bundle (certifi: requests, httpx, pip in a venv), `NODE_EXTRA_CA_CERTS` covers Node; the terminal passes them on.
-  - After a new CA (`ssl/init_ca.sh`): `docker compose up -d --force-recreate as-hermes`.
+  - After a new CA: see [Proxy CA](#proxy-ca).
   - Not covered: a Chromium that Hermes installs for its browser tool reads its own certificate database (NSS).
 - **Hermes persona:** `hermes/SOUL.md`, mounted read-only at `/opt/data/SOUL.md`, so neither the agent nor the dashboard can rewrite it. Edit it on the host, then `docker compose up -d --force-recreate as-hermes`: an editor that replaces the file leaves the container on the old copy.
   - Keep text of your own in it beyond the image's default persona (the example's "This environment" section). Hermes rewrites an unedited default or an old template in place; on a read-only file that stops it from starting.
@@ -350,6 +351,27 @@ Qwen are on it (`ALLOW_OUT` of their sidecars); the Claude bridge is not.
 - Pin versions with `CLAUDE_CODE_VERSION` and the `*_IMAGE` variables in `.env`.
 - **Tools in the Claude agents** go into `claude-main/Dockerfile` (`docker compose up -d` rebuilds): the root filesystem is read-only and root in the container has no capabilities, so `docker compose exec -u root … apt-get install` no longer works. `pip install --user` and `npm` caches land in `/home/node`.
 - **Limits hit:** a container at `AGENT_MEM_LIMIT` loses processes to the OOM killer (`docker inspect -f '{{.State.OOMKilled}}' as-claude-main`), one at `AGENT_PIDS_LIMIT` gets `fork: Resource temporarily unavailable`. Raise the value in `.env`, then `docker compose up -d`.
+
+### Proxy CA
+
+Squid bumps all TLS with the CA from `ssl/init_ca.sh`: `ssl/squid-ca.key` (UID 13, mode
+400, Squid only) and `ssl/squid-ca.crt` (valid 10 years).
+
+- **Mounted, never created by Docker.** Every mount of the CA has `create_host_path: false`
+  (`validate.sh` checks it). Without the files a container does not start, instead of
+  Docker creating root-owned directories in their place and the stack coming up with TLS
+  broken.
+- **`check-env.sh`** (run by `run-first.sh`) fails on a missing CA, a directory in its
+  place, a certificate that is not PEM or has expired, and a key readable by group or
+  others; it warns 30 days before expiry, about a key not owned by UID 13 and a
+  certificate that is not world-readable.
+- **Rotation:** `ssl/init_ca.sh --force`, then
+  `docker compose up -d --build --force-recreate`. Squid, LiteLLM, Headroom, Hermes and
+  netshoot mount the CA, the Claude images (agent, Claude on Qwen, bridge) bake it in, so
+  all of them need the new one; the command also ends the running agent sessions. Logins
+  in the agents' homes stay.
+- **A directory left from before** (`ssl/squid-ca.crt/`, owned by root): `sudo rm -r` it,
+  then `ssl/init_ca.sh`. The script refuses to run over a directory.
 
 ### Firewall drop logs (`FW_LOG`)
 

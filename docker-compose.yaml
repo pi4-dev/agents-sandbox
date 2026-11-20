@@ -40,6 +40,10 @@ x-claude-image: &claude-image
   image: agents-sandbox/claude
   pull_policy: build
 
+# The proxy CA (ssl/squid-ca.crt, .key; ssl/init_ca.sh) is mounted with create_host_path:
+# false everywhere: without it Docker would create the missing files as root-owned
+# directories and start the stack with TLS broken. Missing, a container does not start.
+
 # Dual-homed gateways (as-squid, as-ingress) must not route between their legs:
 # Docker starts every container with ip_forward=1, which would make them routers
 # from as-net-blind to the VLAN for any agent that sets its own route. (IPv6: the
@@ -151,7 +155,12 @@ services:
           create_host_path: false
       # Squid bumps all TLS: its CA joins the system store at every start, by an s6 hook
       # that runs as root before Hermes (hermes/ca-trust.sh)
-      - ./ssl/squid-ca.crt:/usr/local/share/ca-certificates/proxy-ca.crt:ro
+      - type: bind
+        source: ./ssl/squid-ca.crt
+        target: /usr/local/share/ca-certificates/proxy-ca.crt
+        read_only: true
+        bind:
+          create_host_path: false
       - ./hermes/ca-trust.sh:/etc/cont-init.d/00-proxy-ca:ro
 
     network_mode: service:as-hermes-net
@@ -233,7 +242,12 @@ services:
       - ./litellm/litellm-config.yaml:/app/config.yaml:ro
       - ./litellm/models:/app/models:ro      # one file per API endpoint, all included (run.sh)
       - ./litellm/run.sh:/scripts/run.sh:ro  # config + include: of every models/*.yaml
-      - ./ssl/squid-ca.crt:/certs/proxy-ca.crt:ro
+      - type: bind
+        source: ./ssl/squid-ca.crt
+        target: /certs/proxy-ca.crt
+        read_only: true
+        bind:
+          create_host_path: false
       - ./litellm/logging.json:/app/logging.json:ro
       - ./litellm/logs:/var/log/litellm      # access.log: every request, rotated daily, 7 kept
     entrypoint: ["/bin/sh", "/scripts/run.sh"]      # then the image's entrypoint, --config /tmp/config.yaml
@@ -346,7 +360,12 @@ services:
     command: ["--no-rate-limit", "--no-cache"]
     volumes:
       - ./headroom/data:/data                       # workspace, Hugging Face cache
-      - ./ssl/squid-ca.crt:/certs/proxy-ca.crt:ro
+      - type: bind
+        source: ./ssl/squid-ca.crt
+        target: /certs/proxy-ca.crt
+        read_only: true
+        bind:
+          create_host_path: false
     tmpfs: [/tmp]
     # Docker's embedded DNS answers hf-proxy.as.internal (as-net-headroom-egress), as-dns the rest
     dns: ["${DNS_IP}"]
@@ -460,8 +479,18 @@ services:
       # whole directory (not single files): edit + reload_squid.sh sees the new content
       - ./squid/conf:/etc/squid/conf:ro
       - ./squid/logs:/var/log/squid
-      - ./ssl/squid-ca.crt:/etc/squid/ssl/squid-ca.crt:ro
-      - ./ssl/squid-ca.key:/etc/squid/ssl/squid-ca.key:ro
+      - type: bind
+        source: ./ssl/squid-ca.crt
+        target: /etc/squid/ssl/squid-ca.crt
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./ssl/squid-ca.key
+        target: /etc/squid/ssl/squid-ca.key
+        read_only: true
+        bind:
+          create_host_path: false
       - ./squid/errors:/etc/squid/errors:ro
     tmpfs:
       - /var/lib/squid:uid=13,gid=13,mode=0750
@@ -513,7 +542,12 @@ services:
       REQUESTS_CA_BUNDLE: /etc/ssl/certs/ca-certificates.crt
     volumes:
       # Squid bumps all TLS: trust its CA (added to the system store at start)
-      - ./ssl/squid-ca.crt:/usr/local/share/ca-certificates/proxy-ca.crt:ro
+      - type: bind
+        source: ./ssl/squid-ca.crt
+        target: /usr/local/share/ca-certificates/proxy-ca.crt
+        read_only: true
+        bind:
+          create_host_path: false
     command:
       - sh
       - -c

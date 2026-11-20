@@ -1,9 +1,20 @@
 #!/bin/bash
 # Creates the CA for Squid's SSL-bump: ssl/squid-ca.key (UID 13 = proxy only) and ssl/squid-ca.crt.
-# After a rotation (--force): docker compose build as-claude-main as-claude-bridge
-#                       docker compose up -d --force-recreate as-squid as-litellm as-claude-main as-claude-bridge
+# After a rotation (--force) every container that uses the CA needs the new one: Squid,
+# LiteLLM, Headroom, Hermes and netshoot mount it, the Claude images (agent, Claude on
+# Qwen, bridge) bake it in. One command covers all of them (it restarts the agent sessions):
+#   docker compose up -d --build --force-recreate
 set -euo pipefail
 cd "$(dirname "$0")"   # files always go to ssl/, whatever the current directory
+
+# a bind mount of a missing file makes Docker create a root-owned directory of that name;
+# mv would then move the new file into it
+for f in squid-ca.key squid-ca.crt; do
+  if [[ -d $f ]]; then
+    echo "ssl/$f is a directory (created by Docker for a missing file). Remove it first: sudo rm -r ssl/$f" >&2
+    exit 1
+  fi
+done
 
 if [[ -e squid-ca.key && "${1:-}" != "--force" ]]; then
   echo "CA already exists (ssl/squid-ca.key). Use --force to generate a new one." >&2
@@ -28,3 +39,6 @@ mv -f squid-ca.key.new squid-ca.key
 mv -f squid-ca.crt.new squid-ca.crt
 
 openssl x509 -in squid-ca.crt -noout -subject -enddate
+if [[ "${1:-}" == "--force" ]]; then
+  echo "New CA. Give it to every container: docker compose up -d --build --force-recreate"
+fi

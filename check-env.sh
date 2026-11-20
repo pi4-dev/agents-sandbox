@@ -83,6 +83,38 @@ if [ $mode = local ]; then
   fi
 fi
 
+# --- proxy CA (ssl/init_ca.sh): Squid bumps all TLS with it, every client trusts it ---
+if [ $mode = local ]; then
+  for f in ssl/squid-ca.crt ssl/squid-ca.key; do
+    if [ -d "$f" ]; then
+      err "$f is a directory (Docker created it for a missing file); remove it (sudo rm -r $f), then run ssl/init_ca.sh"
+    elif [ ! -f "$f" ]; then
+      err "missing $f; create the proxy CA: ssl/init_ca.sh"
+    fi
+  done
+  if [ -f ssl/squid-ca.crt ]; then
+    if ! openssl x509 -in ssl/squid-ca.crt -noout 2>/dev/null; then
+      err "ssl/squid-ca.crt is not a PEM certificate; create the CA again: ssl/init_ca.sh --force"
+    elif ! openssl x509 -in ssl/squid-ca.crt -noout -checkend 0 >/dev/null; then
+      err "ssl/squid-ca.crt has expired; rotate it: ssl/init_ca.sh --force (README, \"Proxy CA\")"
+    elif ! openssl x509 -in ssl/squid-ca.crt -noout -checkend $((30 * 86400)) >/dev/null; then
+      echo "check-env: warning: ssl/squid-ca.crt expires within 30 days ($(openssl x509 -in ssl/squid-ca.crt -noout -enddate | cut -d= -f2)); rotate it: ssl/init_ca.sh --force" >&2
+    fi
+    # the containers read it as non-root users (Hermes, the agents, LiteLLM's image user)
+    [ -n "$(find ssl/squid-ca.crt -perm -o=r)" ] ||
+      echo "check-env: warning: ssl/squid-ca.crt is not world-readable; clients in the containers cannot load it. Fix: chmod 644 ssl/squid-ca.crt" >&2
+  fi
+  # the key: Squid (proxy, UID 13) only; init_ca.sh sets 13:13 and 400
+  if [ -f ssl/squid-ca.key ]; then
+    if [ "$(stat -c %u ssl/squid-ca.key)" != 13 ]; then
+      echo "check-env: warning: ssl/squid-ca.key is not owned by UID 13 (proxy in as-squid), which cannot read it. Fix: sudo chown 13:13 ssl/squid-ca.key" >&2
+    fi
+    if [ -n "$(find ssl/squid-ca.key -perm /077)" ]; then
+      err "ssl/squid-ca.key is readable or writable by group or others; whoever reads it can sign certificates every container trusts. Fix: sudo chmod 400 ssl/squid-ca.key"
+    fi
+  fi
+fi
+
 # --- values that must match ---
 db=litellm/litellm-db.env$sfx ll=litellm/litellm.env$sfx
 if [ -f "$db" ] && [ -f "$ll" ]; then

@@ -247,6 +247,17 @@ for name in [n for n in svc if n.endswith("-net")]:
           f"{name}: only NET_ADMIN and NET_RAW (iptables)")
     check("no-new-privileges:true" in (s.get("security_opt") or []), f"{name}: no-new-privileges")
 
+# --- proxy CA: never created by Docker (a missing file would become a root-owned directory) ---
+ca_mounts = [(name, v) for name, s in svc.items() for v in s.get("volumes", [])
+             if re.search(r"/ssl/squid-ca\.(crt|key)$", v.get("source", ""))]
+check(len(ca_mounts) >= 6 and all(v.get("read_only") is True for _, v in ca_mounts),
+      f"proxy CA mounted read-only ({len(ca_mounts)} mounts)")
+check(not re.search(r"(?m)^\s*- \./ssl/", compose_src)
+      and compose_src.count("source: ./ssl/squid-ca.") == len(ca_mounts)
+      and all(re.search(r"source: \./ssl/squid-ca\.(crt|key)\n\s+target: \S+\n\s+read_only: true\n\s+bind:\n\s+create_host_path: false\n", m.group(0))
+              for m in re.finditer(r"source: \./ssl/squid-ca\.(crt|key)\n(?:.*\n){4}", compose_src)),
+      "proxy CA: every mount has create_host_path: false (Docker never creates it)")
+
 # --- as-llm-gw: the agents' way to LiteLLM ---
 check(env["as-hermes-net"].get("ALLOW_OUT") == "tcp:llm.as.internal:4000 tcp:zenoh.as.internal:7447",
       "as-hermes-net: out only to as-llm-gw (not LiteLLM directly) and the message bus")
