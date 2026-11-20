@@ -9,3 +9,7 @@
 services:
   as-hermes:
     privileged: true
+    # the default's hardening does not apply to full trust
+    cap_drop: !reset []
+    cap_add: !reset []
+    security_opt: !reset []

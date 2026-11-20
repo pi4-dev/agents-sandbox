@@ -231,6 +231,16 @@ for name in ["as-claude-main", "as-claude-qwen"]:
     check(s.get("init") is True, f"{name}: init reaps the exec sessions' leftovers")
     check(int(s.get("pids_limit") or 0) > 0 and int(s.get("mem_limit") or 0) > 0 and s.get("cpus"),
           f"{name}: pids, memory and CPU limits")
+hm = svc["as-hermes"]
+check(hm.get("cap_drop") == ["ALL"] and sorted(hm.get("cap_add") or []) == ["CHOWN", "DAC_OVERRIDE", "FOWNER", "KILL", "SETGID", "SETUID"],
+      "as-hermes: only what s6-overlay needs to drop to PUID (no NET_RAW, NET_ADMIN)")
+check("no-new-privileges:true" in (hm.get("security_opt") or []) and not hm.get("init"),
+      "as-hermes: no-new-privileges; no init (s6 is PID 1)")
+check(int(hm.get("pids_limit") or 0) > 0 and int(hm.get("mem_limit") or 0) > 0 and hm.get("cpus"),
+      "as-hermes: pids, memory and CPU limits")
+ph = priv["services"]["as-hermes"]
+check(not ph.get("cap_drop") and not ph.get("cap_add") and not ph.get("security_opt"),
+      "compose.hermes-privileged.yaml: resets the default's capability and no-new-privileges settings")
 for name in [n for n in svc if n.endswith("-net")]:
     s = svc[name]
     check(s.get("cap_drop") == ["ALL"] and sorted(s.get("cap_add") or []) == ["NET_ADMIN", "NET_RAW"],

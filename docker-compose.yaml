@@ -112,6 +112,17 @@ services:
     #   docker compose -f docker-compose.yaml -f compose.hermes-privileged.yaml up -d
     # The Docker socket is NOT mounted.
 
+    # s6-overlay starts as root (chown, CA hook, drop to PUID), so it keeps the capabilities
+    # for that and nothing else: no NET_RAW or NET_ADMIN next to the sidecar's iptables. The
+    # agent runs as PUID with none effective. No init: true, s6 must be PID 1.
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETUID, SETGID, KILL]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: ${HERMES_PIDS_LIMIT:-4096}
+    mem_limit: ${HERMES_MEM_LIMIT:-6g}
+    memswap_limit: ${HERMES_MEM_LIMIT:-6g}
+    cpus: "${HERMES_CPUS:-2}"
+
     depends_on:
       as-litellm: { condition: service_healthy }
       as-litellm-keys: { condition: service_completed_successfully }
