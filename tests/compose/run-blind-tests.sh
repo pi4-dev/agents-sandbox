@@ -75,6 +75,9 @@ services:
     env_file: !reset []
     volumes: !reset []
     command: ["caddy", "respond", "--listen", ":9119", "HERMES-OK"]
+    # the stand-in's caddy binary carries this file capability; without it in the bounding set
+    # (as-hermes drops all but s6-overlay's) the kernel refuses to exec it
+    cap_add: [NET_BIND_SERVICE]
   as-litellm:
     image: $NETSHOOT
     entrypoint: !reset null   # not litellm/run.sh: the stand-in only sleeps
