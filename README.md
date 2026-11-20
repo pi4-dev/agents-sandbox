@@ -73,6 +73,7 @@ In short:
 
 - **`as-net-blind` is a Docker `internal` network: nothing on it has a route out.** Agents, LiteLLM, Open WebUI and `as-dns` live there. The way out is Squid, the way in `as-ingress`; both have a second leg on the VLAN (`macvlan`, parent `VLAN_PARENT`) and do not route between their legs (`ip_forward=0`, CI-tested with an agent that sets its own route). Changing an address or a route inside `as-net-blind` leads nowhere, even with `NET_ADMIN` (privileged Hermes).
 - Agent processes share the network namespace of their `as-*-net` sidecars. The sidecar applies default-drop IPv4/IPv6 rules (`fw/fw.sh`) between the containers of `as-net-blind`. Only the sidecar has `NET_ADMIN`.
+- **Capabilities and limits.** The sidecars keep only `NET_ADMIN` and `NET_RAW` (iptables). The Claude agents (`as-claude-main`, `as-claude-qwen`) have none at all, `no-new-privileges`, a read-only root filesystem (writable: `/workspace`, `/home/node`, `/tmp`), `init` and limits on memory, processes and CPU (`AGENT_MEM_LIMIT`, `AGENT_PIDS_LIMIT`, `AGENT_CPUS` in `.env`; defaults `4g`, `2048`, `2`, per container). So even a process that became root in an agent container cannot open raw sockets next to the sidecar's rules, and a runaway build stops at its own limits.
 - The egress for agents is Squid at `proxy.as.internal:3128` (fixed port). Squid bumps all TLS and decides on the decrypted request (host, URL, method). Denied requests get `403 Blocked by agents-sandbox proxy policy`.
 - **Hermes reaches LiteLLM only through `as-llm-gw`** (`llm.as.internal:4000`, `llm-gw/Caddyfile`); its firewall drops `litellm.as.internal`.
   - The gateway forwards only the routes of the client keys (the default `LITELLM_CLIENT_ROUTES`; CI keeps both lists equal). Everything else is a 404 that never reaches LiteLLM: `/openapi.json`, `/redoc`, `/health/*`, `/metrics`, `/.well-known/*`, key and admin routes.
@@ -346,6 +347,8 @@ Qwen are on it (`ALLOW_OUT` of their sidecars); the Claude bridge is not.
   - The persona used before stays in `hermes/data/SOUL.md`, hidden by the mount; `gen-secrets.sh` points at it when it creates `hermes/SOUL.md`.
 - DNS queries (agents, LiteLLM, Open WebUI): `dns/logs/` (7 days) or `docker compose logs as-dns` (10 × 10 MB kept). A query for an external name from an agent is worth a look.
 - Pin versions with `CLAUDE_CODE_VERSION` and the `*_IMAGE` variables in `.env`.
+- **Tools in the Claude agents** go into `claude-main/Dockerfile` (`docker compose up -d` rebuilds): the root filesystem is read-only and root in the container has no capabilities, so `docker compose exec -u root … apt-get install` no longer works. `pip install --user` and `npm` caches land in `/home/node`.
+- **Limits hit:** a container at `AGENT_MEM_LIMIT` loses processes to the OOM killer (`docker inspect -f '{{.State.OOMKilled}}' as-claude-main`), one at `AGENT_PIDS_LIMIT` gets `fork: Resource temporarily unavailable`. Raise the value in `.env`, then `docker compose up -d`.
 
 ### Firewall drop logs (`FW_LOG`)
 

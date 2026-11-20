@@ -6,7 +6,12 @@ name: agents-sandbox
 x-fw-sidecar: &fw-sidecar
   image: ${NETSHOOT_IMAGE:-nicolaka/netshoot:latest}
   init: true
-  cap_add: [NET_ADMIN]
+  # root only for iptables: NET_ADMIN for the rules, NET_RAW for iptables-legacy's raw socket
+  cap_drop: [ALL]
+  cap_add: [NET_ADMIN, NET_RAW]
+  security_opt: ["no-new-privileges:true"]
+  pids_limit: 64
+  mem_limit: 64m
   command: ["sh", "/fw.sh"]
   depends_on:
     as-dns: { condition: service_started }   # fw.sh waits until as-dns answers
@@ -39,6 +44,24 @@ x-claude-image: &claude-image
 # Docker starts every container with ip_forward=1, which would make them routers
 # from as-net-blind to the VLAN for any agent that sets its own route. (IPv6: the
 # networks have no IPv6 and IPv6 forwarding starts at 0 in a new namespace.)
+# The Claude agents (as-claude-main, as-claude-qwen) run as node and need no capability:
+# without NET_RAW even a root process in them cannot open raw sockets next to the
+# sidecar's iptables, and no-new-privileges makes setuid/file-capability binaries useless.
+# Writable: /workspace, /home/node (bind mounts) and /tmp. Limits per container, in .env.
+x-agent-hardening: &agent-hardening
+  init: true                          # reaps what `docker compose exec` sessions leave behind
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  read_only: true
+  tmpfs:
+    - /tmp:size=2g,mode=1777
+  pids_limit: ${AGENT_PIDS_LIMIT:-2048}
+  mem_limit: ${AGENT_MEM_LIMIT:-4g}
+  memswap_limit: ${AGENT_MEM_LIMIT:-4g}    # = mem_limit: no swap
+  cpus: "${AGENT_CPUS:-2}"
+  ulimits:
+    nofile: { soft: 8192, hard: 8192 }
+
 x-no-forwarding: &no-forwarding
   net.ipv4.ip_forward: 0
   net.ipv4.conf.all.forwarding: 0
@@ -512,9 +535,8 @@ services:
 # - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
   as-claude-main:
-    <<: *claude-image
+    <<: [*claude-image, *agent-hardening]
     container_name: as-claude-main
-    #init: true
     network_mode: service:as-claude-net
     depends_on:
       as-claude-net:
@@ -562,7 +584,7 @@ services:
         aliases: [claude-qwen.as.internal]
 
   as-claude-qwen:
-    <<: *claude-image
+    <<: [*claude-image, *agent-hardening]
     container_name: as-claude-qwen
     network_mode: service:as-claude-qwen-net
     depends_on:

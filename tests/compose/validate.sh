@@ -221,6 +221,22 @@ for name in ["as-litellm", "as-open-webui", "as-ingress", "as-llm-gw", "as-zenoh
     check(svc[name].get("dns") == [dns_ip], f"{name}: unknown names go to as-dns")
 check("dns" not in svc["as-squid"] and env["as-squid"].get("SQUID_DNS_UPSTREAM"),
       "as-squid: resolves internet names itself (SQUID_DNS_UPSTREAM)")
+# --- hardening: the Claude agents without capabilities, the sidecars with iptables' only ---
+for name in ["as-claude-main", "as-claude-qwen"]:
+    s = svc[name]
+    check(s.get("cap_drop") == ["ALL"] and not s.get("cap_add"), f"{name}: no capabilities (no NET_RAW next to the sidecar)")
+    check("no-new-privileges:true" in (s.get("security_opt") or []), f"{name}: no-new-privileges")
+    check(s.get("read_only") is True and any(str(x).startswith("/tmp") for x in (s.get("tmpfs") or [])),
+          f"{name}: read-only root filesystem, /tmp on tmpfs")
+    check(s.get("init") is True, f"{name}: init reaps the exec sessions' leftovers")
+    check(int(s.get("pids_limit") or 0) > 0 and int(s.get("mem_limit") or 0) > 0 and s.get("cpus"),
+          f"{name}: pids, memory and CPU limits")
+for name in [n for n in svc if n.endswith("-net")]:
+    s = svc[name]
+    check(s.get("cap_drop") == ["ALL"] and sorted(s.get("cap_add") or []) == ["NET_ADMIN", "NET_RAW"],
+          f"{name}: only NET_ADMIN and NET_RAW (iptables)")
+    check("no-new-privileges:true" in (s.get("security_opt") or []), f"{name}: no-new-privileges")
+
 # --- as-llm-gw: the agents' way to LiteLLM ---
 check(env["as-hermes-net"].get("ALLOW_OUT") == "tcp:llm.as.internal:4000 tcp:zenoh.as.internal:7447",
       "as-hermes-net: out only to as-llm-gw (not LiteLLM directly) and the message bus")
