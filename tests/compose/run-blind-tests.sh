@@ -22,8 +22,8 @@ img() { sed -nE "s/.*\\\$\\{$1:-([^}]+)\\}.*/\\1/p" "$REPO/docker-compose.yaml" 
 NETSHOOT=$(img NETSHOOT_IMAGE)
 CADDY=$(img CADDY_IMAGE)
 PARENT=asblt$$
-LAN_IP=192.19.255.50   # a LAN host on the VLAN, outside HERMES/INGRESS_DASHBOARD_ALLOW_FROM
-ADMIN_IP=192.19.255.60 # a LAN host inside both
+LAN_IP=10.19.255.50   # a LAN host on the VLAN, outside HERMES/INGRESS_DASHBOARD_ALLOW_FROM
+ADMIN_IP=10.19.255.60 # a LAN host inside both
 W=$(mktemp -d)
 BRNF=/proc/sys/net/bridge/bridge-nf-call-iptables
 BRNF_OLD=
@@ -381,7 +381,7 @@ check_not "as-net-blind -> Squid's VLAN leg is unreachable" \
 # (dual-homed, Docker's default ip_forward=1) proves the test can see an escape.
 if [ -w "$BRNF" ]; then BRNF_OLD=$(cat "$BRNF"); echo 0 >"$BRNF"; fi
 docker run -d --name asbt-lan --network "$VLAN" --ip $LAN_IP "$NETSHOOT" socat -u UDP-RECV:9999 STDOUT >/dev/null
-docker run -d --name asbt-ctl --network "$VLAN" --ip 192.19.255.51 "$NETSHOOT" sleep infinity >/dev/null
+docker run -d --name asbt-ctl --network "$VLAN" --ip 10.19.255.51 "$NETSHOOT" sleep infinity >/dev/null
 docker network connect "$BLIND" asbt-ctl
 sleep 1
 for gw in as-squid as-ingress asbt-ctl; do
@@ -392,6 +392,30 @@ got=$(docker logs asbt-lan 2>&1)
 check "control: a forwarding dual-homed container lets UDP out" grep -q ESCAPE-asbt-ctl <<<"$got"
 check_not "no escape through as-squid" grep -q ESCAPE-as-squid <<<"$got"
 check_not "no escape through as-ingress" grep -q ESCAPE-as-ingress <<<"$got"
+
+# --- LAN clients of the proxy: SQUID_LOCALNET_EXTRA is empty by default, so a host on the
+# VLAN gets 403 from Squid. Listed there, its request passes the ACLs: Squid then looks the
+# name up at SQUID_DNS_UPSTREAM, where nothing answers in this test, so the verdict comes
+# from access.log (TCP_DENIED or not) instead of waiting for the DNS timeout.
+LAN_PROXY_IP=10.19.255.52 LAN_OTHER_IP=10.19.255.53
+lan_proxy() { # lan_proxy <ip>: Squid's access.log line for a request to an allowlisted host through its VLAN leg
+  docker run --rm --network "$VLAN" --ip "$1" "$NETSHOOT" curl -s --max-time 3 -o /dev/null \
+    -x "http://$(envval PROXY_IP):$PROXY_PORT" http://api.anthropic.com/ || true
+  sleep 1
+  docker exec as-squid grep -F " $1 " /var/log/squid/access.log | tail -n1
+}
+check "LAN host -> Squid, SQUID_LOCALNET_EXTRA empty (default) -> denied" \
+  grep -q TCP_DENIED/403 <<<"$(lan_proxy $LAN_PROXY_IP)"
+sed -i "s#^SQUID_LOCALNET_EXTRA=.*#SQUID_LOCALNET_EXTRA=$LAN_PROXY_IP/32#" .env
+docker compose up -d --no-deps as-squid >/dev/null 2>&1
+for _ in $(seq 1 30); do
+  [ "$(docker inspect -f '{{.State.Health.Status}}' as-squid 2>/dev/null)" = healthy ] && break
+  sleep 1
+done
+line=$(lan_proxy $LAN_PROXY_IP)
+admitted() { [ -n "$1" ] && [[ $1 != *TCP_DENIED* ]]; }   # a logged request that the ACLs let through
+check "LAN host in SQUID_LOCALNET_EXTRA -> Squid passes the ACLs" admitted "$line"
+check "LAN host not in SQUID_LOCALNET_EXTRA -> denied" grep -q TCP_DENIED/403 <<<"$(lan_proxy $LAN_OTHER_IP)"
 
 if [ "$FAIL" -gt 0 ]; then
   docker compose ps -a

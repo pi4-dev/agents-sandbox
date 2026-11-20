@@ -208,6 +208,18 @@ if [ $mode = local ] && [ -f .env ]; then
   done < <(sed -nE 's/^([A-Z0-9_]+)[[:space:]]*[=:].*/\1/p' .env.example)
 fi
 
+# --- .env: the VLAN in private space, the proxy closed to LANs unless asked for ---
+if [ $mode = local ] && [ -f .env ]; then
+  vlan=$(get .env VLAN_SUBNET)
+  if [ -n "$vlan" ] && ! [[ $vlan =~ ^(10\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.168\.) ]]; then
+    echo "check-env: warning: VLAN_SUBNET in .env ($vlan) is not RFC1918 space: it belongs to someone else on the internet, whose hosts become unreachable, and a NAT or routing mistake leaks traffic there. Move it, e.g. to 10.19.255.0/24 (README, \"Changing addressing\"; docs/NETWORK.md)" >&2
+  fi
+  # the value .env.example carried until it became empty
+  if [ "$(get .env SQUID_LOCALNET_EXTRA)" = 192.168.100.0/24 ]; then
+    echo "check-env: warning: SQUID_LOCALNET_EXTRA=192.168.100.0/24 in .env is the old example value: that network may use the proxy. Leave it empty unless it really does (docs/NETWORK.md, flow matrix)" >&2
+  fi
+fi
+
 # --- service env files: keys new in the examples (a warning; some may be left out on purpose) ---
 if [ $mode = local ]; then
   for svc in "${SERVICE_ENVS[@]}"; do

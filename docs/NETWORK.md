@@ -7,7 +7,7 @@ stack may reach.
 The examples use the addresses from `.env.example`; replace them with yours.
 Values in angle brackets (`<LLM_LAN_IP>`, `<LLM_LAN_PORT>`) have no default and must be filled in.
 They assume the router is also Squid's DNS server:
-`SQUID_DNS_UPSTREAM` is the VLAN gateway, `192.19.255.1`, the default in `.env.example`.
+`SQUID_DNS_UPSTREAM` is the VLAN gateway, `10.19.255.1`, the default in `.env.example`.
 
 ## 1. Topology
 
@@ -19,7 +19,7 @@ Drawing: [topology.svg](topology.svg) (amber frames are the `fw.sh` sidecars).
                    ┌──────┴──────┐  WAN
                    │ edge router │  DNS resolver for Squid
                    └──┬───────┬──┘
-          users / admin│       │ vlan100 (192.19.255.0/24), gateway .1
+          users / admin│       │ vlan100 (10.19.255.0/24), gateway .1
                        │       │
                        │   ┌───┴──────────── Docker host ────────────────────────────────────────┐
                        │   │  as-net-vlan (macvlan):  .101 as-squid          .99 as-ingress      │
@@ -85,10 +85,11 @@ alarm for that.
   management VLAN, not through `vlan100`.
 - **No IPv6 in the VLAN:** the router sends no router advertisements there and
   forwards no IPv6.
-- **RFC1918 addressing.** `192.19.255.0/24` belongs to someone else on the
-  internet: those hosts become unreachable, and a NAT or routing mistake can leak
-  traffic. Move to e.g. `10.19.255.0/24` before deploying these rules; only `.env`
-  changes.
+- **RFC1918 addressing.** The VLAN must be private space (the default
+  `10.19.255.0/24` is). A public range belongs to someone else on the internet:
+  those hosts become unreachable, and a NAT or routing mistake can leak traffic.
+  `check-env.sh` warns about a `VLAN_SUBNET` outside RFC1918. Changing it: only
+  `.env` (README, "Changing addressing").
 - **Routing in the router CPU.** If inter-VLAN routing is hardware-offloaded
   (switch chip), the firewall does not see it.
 
@@ -115,7 +116,7 @@ Default policy in both directions: **drop and log**.
 | admin network | ingress `.99:80` (dashboard: links to the GUIs) | Caddy also checks `INGRESS_DASHBOARD_ALLOW_FROM` |
 | admin network | ingress `.99:4000` (LiteLLM API and `/ui`) | the UI login is the master key |
 | admin network | ingress `.99:9119` (Hermes dashboard) | Caddy also checks `HERMES_DASHBOARD_ALLOW_FROM` |
-| `SQUID_LOCALNET_EXTRA` (e.g. `192.168.100.0/24`) | Squid `.101:3128` | only if that network really uses the proxy; otherwise remove it from `.env` |
+| `SQUID_LOCALNET_EXTRA` (empty by default; e.g. `192.168.100.0/24`) | Squid `.101:3128` | only if that network really uses the proxy; Squid admits only what `.env` lists |
 | nobody | anything else | the services in `as-net-blind` are not on the VLAN at all |
 
 ### The router itself
@@ -141,7 +142,7 @@ NAT to the internet is needed only for Squid.
 ## 6. MikroTik (RouterOS v7), router as the DNS server
 
 Assumptions:
-- `vlan100` is the VLAN interface with `192.19.255.1/24`;
+- `vlan100` is the VLAN interface with `10.19.255.1/24`;
 - WAN is in the interface list `WAN`, as in the default configuration;
 - `vlan100` is **not** in the list `LAN`. Otherwise the default rules let the VLAN
   into the router, Winbox and SSH included.
@@ -149,7 +150,7 @@ Assumptions:
 ```routeros
 # ===== 0. VLAN (if it does not exist yet) =====
 /interface vlan add name=vlan100 vlan-id=100 interface=bridge
-/ip address add address=192.19.255.1/24 interface=vlan100
+/ip address add address=10.19.255.1/24 interface=vlan100
 /interface list add name=AS
 /interface list member add list=AS interface=vlan100
 
@@ -160,9 +161,9 @@ Assumptions:
 
 # ===== 2. Address lists (counterparts of .env) =====
 /ip firewall address-list
-add list=as-vlan    address=192.19.255.0/24
-add list=as-squid   address=192.19.255.101 comment=PROXY_IP
-add list=as-ingress address=192.19.255.99  comment=INGRESS_IP
+add list=as-vlan    address=10.19.255.0/24
+add list=as-squid   address=10.19.255.101 comment=PROXY_IP
+add list=as-ingress address=10.19.255.99  comment=INGRESS_IP
 add list=as-llm-lan address=<LLM_LAN_IP>   comment="optional: LLM server in the LAN"
 add list=as-admin   address=10.0.0.0/24    comment="admin net / HERMES_ and INGRESS_DASHBOARD_ALLOW_FROM"
 add list=as-users   address=192.168.1.0/24 comment="users of Open WebUI"
@@ -268,9 +269,9 @@ add chain=input   in-interface=vlan100  action=drop
 The same policy for a Linux router (OPNsense/pfSense: same logic, as aliases and rules):
 
 ```nft
-define VLAN    = 192.19.255.0/24
-define SQUID   = 192.19.255.101
-define INGRESS = 192.19.255.99
+define VLAN    = 10.19.255.0/24
+define SQUID   = 10.19.255.101
+define INGRESS = 10.19.255.99
 define LLMLAN  = <LLM_LAN_IP>            # optional: LLM server in the LAN
 define PRIVATE = { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10, 169.254.0.0/16 }
 define ADMIN   = 10.0.0.0/24
@@ -315,7 +316,7 @@ table inet as {
 }
 ```
 
-The router's resolver (unbound, dnsmasq…) listens on `192.19.255.1` and is
+The router's resolver (unbound, dnsmasq…) listens on `10.19.255.1` and is
 reachable from `vlan100` only for Squid (input chain).
 
 ## 8. Verification
@@ -326,8 +327,8 @@ Run these after every change on the router.
 1. **Nothing else leaves the VLAN.** Put a throwaway container on the VLAN, which
    only an operator can do:
    ```bash
-   docker run --rm --network agents-sandbox_as-net-vlan --ip 192.19.255.60 nicolaka/netshoot \
-     sh -c 'curl -m 5 https://example.com; dig +time=2 @192.19.255.1 example.com'
+   docker run --rm --network agents-sandbox_as-net-vlan --ip 10.19.255.60 nicolaka/netshoot \
+     sh -c 'curl -m 5 https://example.com; dig +time=2 @10.19.255.1 example.com'
    ```
    Expected: both fail, and the router logs `AS-OUT-DENY` and `AS-DNS-BYPASS`.
 2. **No way out of `as-net-blind`**, even with a route set by hand:
@@ -344,9 +345,9 @@ Run these after every change on the router.
 4. **Squid resolves through the router:** from an agent container,
    `curl -sk https://api.anthropic.com/` is not a DNS error.
 5. **Only intended ports are open from outside:**
-   - `nmap -Pn 192.19.255.0/24` from the users network: only `.99:8080`;
+   - `nmap -Pn 10.19.255.0/24` from the users network: only `.99:8080`;
    - from the admin network: also `.99:80`, `.99:4000` and `.99:9119`.
-6. **Spoofed VLAN source from elsewhere** (e.g. `hping3 -a 192.19.255.101` from
+6. **Spoofed VLAN source from elsewhere** (e.g. `hping3 -a 10.19.255.101` from
    the users network): dropped by the raw rule, counter in
    `/ip firewall raw print stats` goes up.
 7. **Counters and logs** on the router/firewall, e.g. with the MikroTik example from section 6:

@@ -91,7 +91,6 @@ In short:
   - LiteLLM, Open WebUI, `as-ingress` and `as-llm-gw` (no sidecar) use `dns: DNS_IP`: Docker's embedded DNS answers the aliases of their networks itself and sends the rest to `as-dns`.
   - Firewall rules take names (`ALLOW_OUT=tcp:llm.as.internal:4000`). `fw.sh` re-resolves them every 30 s (`FW_REFRESH`) and rebuilds the rules when a peer starts, stops or comes back on another address; a name that does not resolve gets no rule.
 - Restrict the VLAN legs on the edge router/firewall: [docs/NETWORK.md](docs/NETWORK.md) has the flow matrix, anti-spoofing, example configurations and verification steps.
-- The default `192.19.255.0/24` subnet is not RFC1918 space (see "Changing addressing").
 - Hermes runs **without** `privileged`. Full-trust mode is opt-in:
   `docker compose -f docker-compose.yaml -f compose.hermes-privileged.yaml up -d`.
 - Env files use `KEY=value` and Compose interpolation (`${BLIND_SUBNET}`). Use them through Docker Compose, not `docker run --env-file`.
@@ -440,8 +439,6 @@ Known limitations:
   LiteLLM access logs hold request URIs with their query strings (not bodies), the DNS
   log every name looked up, the bus log every message. Anyone with access to these
   directories on the host can read them.
-- **Default addressing is public space.** `192.19.255.0/24` is not RFC1918; move
-  it (see "Changing addressing").
 - **Image tags and `CLAUDE_CODE_VERSION` float** unless you pin them in `.env`.
 - **GUIs are plain HTTP.** `as-ingress` serves them without TLS; the Hermes
   dashboard sends basic auth in the clear, and the first Open WebUI signup becomes
