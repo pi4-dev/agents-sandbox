@@ -14,7 +14,9 @@
 #   LiteLLM with the client's key; the other routes go to LiteLLM directly. Every
 #   X-Headroom-* header from the client is dropped (x-headroom-base-url would pick
 #   Headroom's upstream), then the token from headroom/headroom.env is added. Responses
-#   lose x-headroom-* too. Rollback: point @compressed at litellm.as.internal:4000.
+#   lose x-headroom-* too. Without the headroom profile (COMPOSE_PROFILES) @compressed does
+#   not match, so these routes go to LiteLLM directly like the others.
+#   Rollback: point @compressed at litellm.as.internal:4000.
 # - Error bodies pass unchanged.
 #
 # Access log (JSON, Authorization redacted): llm-gw/logs/access.log, rolled at 10 MiB,
@@ -35,7 +37,12 @@
 		}
 	}
 	@client_routes path /v1/chat/completions /chat/completions /v1/completions /completions /v1/messages /v1/messages/count_tokens /v1/models /models
-	@compressed path /v1/chat/completions /chat/completions /v1/messages
+	# through as-headroom only while its profile is active: AS_PROFILES is ",<COMPOSE_PROFILES>,"
+	# (docker-compose.yaml); unset, as outside Compose, means every profile
+	@compressed {
+		path /v1/chat/completions /chat/completions /v1/messages
+		expression `'{$AS_PROFILES:,*,}'.matches('(^|,)[ ]*(headroom|[*])[ ]*(,|$)')`
+	}
 	# handle blocks are tried in this order; the first match wins
 	handle @compressed {
 		request_header -X-Headroom-*

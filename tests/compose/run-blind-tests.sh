@@ -29,6 +29,7 @@ BRNF=/proc/sys/net/bridge/bridge-nf-call-iptables
 BRNF_OLD=
 
 export COMPOSE_PROJECT_NAME=as-net-blind-test COMPOSE_FILE=docker-compose.yaml:blind-test.yaml
+export COMPOSE_PROFILES='*'   # every profile: the test starts services of all of them
 cleanup() {
   if [ -n "$BRNF_OLD" ]; then echo "$BRNF_OLD" >"$BRNF"; fi
   docker rm -f asbt-lan asbt-ctl asbt-zsub >/dev/null 2>&1 || true

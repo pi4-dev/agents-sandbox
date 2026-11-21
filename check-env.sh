@@ -41,12 +41,27 @@ for f in "${envs[@]}"; do
   else err "missing $f"; fi
 done
 
+# --- profiles: COMPOSE_PROFILES (shell over .env, as Compose reads it) ---
+KNOWN_PROFILES="claude qwen hermes bridge headroom webui debug"
+profiles=
+if [ $mode = local ] && [ -f .env ]; then
+  if [ -n "${COMPOSE_PROFILES+set}" ]; then profiles=$COMPOSE_PROFILES; else profiles=$(get .env COMPOSE_PROFILES); fi
+fi
+# active <profile>: listed in COMPOSE_PROFILES or "*"; in --examples mode every profile
+active() {
+  [ $mode = examples ] && return 0
+  [[ ",${profiles// /}," == *",$1,"* || ",${profiles// /}," == *",*,"* ]]
+}
+# keys whose placeholders do not matter while their profile is off
+skip_key() { [[ $1 == CLAUDE_QWEN_* ]] && ! active qwen; }
+
 # --- placeholders (comments are ignored) ---
 scan() { # scan <file> <allow CHANGE_ME_*: yes|no>
   local file=$1 allow=$2 n line tok key where
   while IFS=: read -r n line; do
     line=${line%%[[:space:]]#*}   # inline comment
     key=${line%%[=:]*}
+    if [[ $file == .env* ]] && skip_key "${key##*[[:space:]]}"; then continue; fi
     where="in ${key##*[[:space:]]}"
     if [[ $file == *.txt || $file == *.txt.example ]]; then where="in an active rule"; fi
     while read -r tok; do
@@ -204,8 +219,45 @@ fi
 # --- .env has every key of .env.example ---
 if [ $mode = local ] && [ -f .env ]; then
   while read -r k; do
-    grep -qE "^[[:space:]]*${k}[[:space:]]*[=:]" .env || err "missing $k in .env (see .env.example)"
+    grep -qE "^[[:space:]]*${k}[[:space:]]*[=:]" .env && continue
+    if [ "$k" = COMPOSE_PROFILES ]; then
+      err "missing COMPOSE_PROFILES in .env: without it only the core starts (no agents). What ran before: COMPOSE_PROFILES=claude,qwen,hermes,bridge,headroom,webui,debug (README, \"Profiles\")"
+    else
+      err "missing $k in .env (see .env.example)"
+    fi
   done < <(sed -nE 's/^([A-Z0-9_]+)[[:space:]]*[=:].*/\1/p' .env.example)
+fi
+
+# --- profiles: known names, what an active profile needs ---
+if [ $mode = local ] && [ -f .env ]; then
+  IFS=', ' read -r -a plist <<<"$profiles"
+  for p in "${plist[@]}"; do
+    [ -n "$p" ] || continue   # Compose ignores empty entries and spaces too
+    [[ " $KNOWN_PROFILES * " == *" $p "* ]] || err "COMPOSE_PROFILES: unknown profile '$p' (known: ${KNOWN_PROFILES// /, }, or *)"
+  done
+  if active qwen; then
+    [ -n "$(get .env CLAUDE_QWEN_MODEL)" ] ||
+      err "CLAUDE_QWEN_MODEL is empty in .env; the qwen profile needs it (a model_name from litellm/models), or drop qwen from COMPOSE_PROFILES"
+    [[ $(get .env CLAUDE_QWEN_CONTEXT_TOKENS) =~ ^[0-9]+$ ]] ||
+      err "CLAUDE_QWEN_CONTEXT_TOKENS in .env must be the model's context window in tokens (e.g. 131072) for the qwen profile"
+  fi
+  # models of a file whose profile is off (litellm/run.sh skips it), used by an active agent
+  off_models=()
+  for f in litellm/models/*.yaml; do
+    p=$(sed -nE 's/^#[[:space:]]*@profile[[:space:]]+([A-Za-z0-9_-]+).*/\1/p' "$f" | head -n1)
+    if [ -n "$p" ] && ! active "$p"; then
+      while read -r n; do off_models+=("$n:$p"); done < <(sed -nE 's/^[[:space:]]*-[[:space:]]*model_name:[[:space:]]*"?([^"#[:space:]]+)"?.*/\1/p' "$f")
+    fi
+  done
+  hermes_model=$(sed -nE '/^model:/,/^[^[:space:]#]/s/^[[:space:]]+default:[[:space:]]*"?([^"#[:space:]]+)"?.*/\1/p' hermes/config.yaml 2>/dev/null | head -n1)
+  for m in "${off_models[@]}"; do
+    if active hermes && [ "${m%%:*}" = "$hermes_model" ]; then
+      echo "check-env: warning: Hermes' model ${m%%:*} (hermes/config.yaml) comes from profile ${m#*:}, which is off; LiteLLM does not offer it. Add ${m#*:} to COMPOSE_PROFILES or pick another model" >&2
+    fi
+    if active qwen && [ "${m%%:*}" = "$(get .env CLAUDE_QWEN_MODEL)" ]; then
+      echo "check-env: warning: CLAUDE_QWEN_MODEL ${m%%:*} comes from profile ${m#*:}, which is off; LiteLLM does not offer it" >&2
+    fi
+  done
 fi
 
 # --- .env: the VLAN in private space, the proxy closed to LANs unless asked for ---

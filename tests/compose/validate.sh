@@ -24,16 +24,24 @@ done < <(find "$W" -name '*.env.example' -print0)
 for f in "$W"/squid/conf/*.example "$W"/hermes/config.yaml.example; do cp "$f" "${f%.example}"; done
 
 cd "$W"
+# the core alone: no profile, the examples untouched (CLAUDE_QWEN_* empty) must render
+COMPOSE_PROFILES='' docker compose config --format json >core.json
+# everything: every profile, and the values the qwen profile needs
+printf 'CLAUDE_QWEN_MODEL=qwen-test\nCLAUDE_QWEN_CONTEXT_TOKENS=131072\n' >>.env
+export COMPOSE_PROFILES='*'
 docker compose config --format json >config.json
 docker compose -f docker-compose.yaml -f compose.hermes-privileged.yaml config --format json >privileged.json
+COMPOSE_PROFILES=$(sed -nE 's/^COMPOSE_PROFILES=(.*)/\1/p' .env.example) docker compose config --format json >default.json
 
-python3 - config.json privileged.json <<'EOF'
+python3 - config.json privileged.json core.json default.json <<'EOF'
 import json
 import re
 import sys
 
 cfg = json.load(open(sys.argv[1]))
 priv = json.load(open(sys.argv[2]))
+core_cfg = json.load(open(sys.argv[3]))
+default_cfg = json.load(open(sys.argv[4]))
 svc = cfg["services"]
 env = {}
 failures = []
@@ -63,6 +71,44 @@ def members(net):
 def aliases(name, net):
     return (svc[name]["networks"][net] or {}).get("aliases") or []
 
+
+# --- profiles: the core runs without any; each agent with its sidecar; optional deps ---
+CORE = ["as-dns", "as-ingress", "as-litellm", "as-litellm-db", "as-litellm-keys", "as-llm-gw", "as-squid"]
+WANT_PROFILES = {
+    "as-claude-net": ["claude"], "as-claude-main": ["claude"], "as-claude-qwen-net": ["qwen"], "as-claude-qwen": ["qwen"],
+    "as-hermes-net": ["hermes"], "as-hermes": ["hermes"], "as-claude-bridge-net": ["bridge"], "as-claude-bridge": ["bridge"],
+    "as-headroom": ["headroom"], "as-open-webui": ["webui"], "as-netshoot-net": ["debug"], "as-netshoot": ["debug"],
+    "as-zenoh": ["claude", "hermes", "qwen"],
+}
+check(sorted(core_cfg["services"]) == CORE, f"no profile: only the core {sorted(core_cfg['services'])}")
+check(sorted(svc) == sorted(CORE + list(WANT_PROFILES)), "every service is in the core or has a profile")
+for name in svc:
+    check(sorted(svc[name].get("profiles") or []) == WANT_PROFILES.get(name, []),
+          f"{name}: profiles {svc[name].get('profiles') or '(core)'}")
+for name, s in svc.items():
+    if s.get("network_mode", "").startswith("service:"):
+        side = s["network_mode"][8:]
+        check(sorted(svc[side].get("profiles") or []) == sorted(s.get("profiles") or []),
+              f"{name}: same profile as its sidecar {side}")
+for name, s in svc.items():
+    mine = set(s.get("profiles") or [])
+    for dep, d in (s.get("depends_on") or {}).items():
+        theirs = set(svc[dep].get("profiles") or [])
+        if theirs and (not mine or not mine <= theirs):   # the dependency can be off while this runs
+            check(d.get("required") is False, f"{name} -> {dep}: optional (required: false; {dep} has profiles {sorted(theirs)})")
+default_svcs = set(default_cfg["services"])
+check("as-netshoot" not in default_svcs and {"as-claude-main", "as-hermes", "as-claude-qwen", "as-claude-bridge",
+      "as-headroom", "as-open-webui"} <= default_svcs,
+      ".env.example: every profile but debug (as-netshoot only on request)")
+for name in ["as-litellm", "as-litellm-keys", "as-llm-gw"]:
+    check((svc[name].get("environment") or {}).get("AS_PROFILES") == ",*,"
+          and (core_cfg["services"][name].get("environment") or {}).get("AS_PROFILES") == ",,",
+          f"{name}: AS_PROFILES is ,<COMPOSE_PROFILES>,")
+check(not re.search(r"\$\{CLAUDE_QWEN_[A-Z_]+:\?", open("docker-compose.yaml").read()),
+      "CLAUDE_QWEN_*: not required by Compose (check-env.sh requires them with the qwen profile)")
+models_tagged = {f: re.search(r"(?m)^#\s*@profile\s+(\S+)", open(f).read()) for f in ["litellm/models/claude-local.yaml"]}
+check(all(m and m.group(1) == "bridge" for m in models_tagged.values()),
+      "litellm/models/claude-local.yaml: loaded only with the bridge profile (# @profile bridge)")
 
 # --- topology: as-net-blind has no route out; only the gateways touch the VLAN ---
 for net in ["as-net-blind", "as-net-litellm-egress", "as-net-litellm-db", "as-net-headroom-egress"]:
@@ -279,7 +325,7 @@ check(len(models_cq) == 1 and None not in models_cq, f"as-claude-qwen: every Cla
 check(cq.get("CLAUDE_CODE_MAX_CONTEXT_TOKENS") not in (None, ""), "as-claude-qwen: context window from CLAUDE_QWEN_CONTEXT_TOKENS")
 check(cq.get("CLAUDE_CODE_EFFORT_LEVEL") == "medium", "as-claude-qwen: effort pinned to medium")
 keys_env = env["as-litellm-keys"].get("LITELLM_CLIENT_KEYS", "")
-check("claude-qwen=ANTHROPIC_AUTH_TOKEN" in keys_env.split() and env["as-litellm-keys"].get("ANTHROPIC_AUTH_TOKEN") == cq.get("ANTHROPIC_AUTH_TOKEN"),
+check("claude-qwen=ANTHROPIC_AUTH_TOKEN@qwen" in keys_env.split() and env["as-litellm-keys"].get("ANTHROPIC_AUTH_TOKEN") == cq.get("ANTHROPIC_AUTH_TOKEN"),
       "as-litellm-keys: registers the claude-qwen key")
 check(not [v for v in svc["as-claude-qwen"]["volumes"] if "claude-main/data" in v.get("source", "")],
       "as-claude-qwen: own workspace and home, nothing from claude-main/data")
@@ -383,7 +429,9 @@ check(hr.get("read_only") is True and hr.get("cap_drop") == ["ALL"] and "no-new-
 check(env["as-llm-gw"].get("HEADROOM_PROXY_TOKEN") == hre.get("HEADROOM_PROXY_TOKEN"),
       "as-llm-gw: holds the same Headroom token (headroom/headroom.env)")
 gw_code = "\n".join(l for l in gw_cfg.splitlines() if not l.lstrip().startswith("#"))
-comp = re.search(r"(?m)^\s*@compressed path (.+)$", gw_code)
+comp = re.search(r"(?m)^\s*@compressed \{\s*\n\s*path (.+)$", gw_code)
+check(re.search(r"@compressed \{[^}]*expression `'\{\$AS_PROFILES:,\*,\}'\.matches\('\(\^\|,\)\[ \]\*\(headroom\|\[\*\]\)\[ \]\*\(,\|\$\)'\)`", gw_code) is not None,
+      "as-llm-gw: chat through Headroom only with its profile (AS_PROFILES; unset: every profile)")
 check(comp and sorted(comp.group(1).split()) == ["/chat/completions", "/v1/chat/completions", "/v1/messages"]
       and set(comp.group(1).split()) <= set(key_routes),
       "as-llm-gw: chat and messages go through Headroom (a subset of the client routes)")

@@ -175,6 +175,32 @@ expect "access log: the revoked key's /v1/models (401)" "$(grep -c '"GET /v1/mod
 # the start-up wait above polled /health/liveliness, the stack's healthcheck path
 expect "access log: no /health/liveliness (the healthcheck's path)" "$(grep -c '/health/liveliness' <<<"$llog")" 0
 
+# profiles: a client whose Compose profile is off is skipped, its key neither created nor
+# checked (a placeholder is fine); with its profile on it is registered
+pjob() { # pjob <AS_PROFILES> <hermes key> <open-webui key> <claude-qwen key>: as docker-compose.yaml runs it
+  docker run --rm --network "$P" --entrypoint python3 \
+    -v "$REPO/litellm/litellm-keys.py:/scripts/litellm-keys.py:ro" \
+    -e LITELLM_URL=http://uri-logger:8080 -e LITELLM_MASTER_KEY="$MASTER" -e AS_PROFILES="$1" \
+    -e LITELLM_CLIENT_KEYS="hermes=LITELLM_API_KEY@hermes open-webui=OPENAI_API_KEY@webui claude-qwen=ANTHROPIC_AUTH_TOKEN@qwen" \
+    -e LITELLM_API_KEY="$2" -e OPENAI_API_KEY="$3" -e ANTHROPIC_AUTH_TOKEN="$4" "$LITELLM" /scripts/litellm-keys.py 2>&1
+}
+all_aliases() {
+  curl -s -H "Authorization: Bearer $MASTER" "http://127.0.0.1:$PORT/key/list?return_full_object=true" |
+    python3 -c 'import json,sys; print(",".join(sorted(k["key_alias"] for k in json.load(sys.stdin)["keys"])))'
+}
+QK=sk-$(openssl rand -hex 24)
+out=$(pjob ,hermes, "$NEW" "$OK" CHANGE_ME_LITELLM_KEY_CLAUDE_QWEN) && ok=yes || ok=no
+expect "profiles: inactive client with a placeholder key does not fail the job" "$ok" yes
+expect "profiles: inactive clients skipped" "$(grep -c 'skipped (profile' <<<"$out")" 2
+expect "profiles: active client checked as before" "$(grep -c 'hermes: already registered$' <<<"$out")" 1
+expect "profiles: nothing created for inactive clients" "$(all_aliases)" "hermes,open-webui"
+expect "profiles: a skipped client's key is left as it was" "$(models "$OK")" "alpha,other"
+out=$(pjob ,claude,qwen, "$NEW" "$OK" "$QK")
+expect "profiles: client registered when its profile is on" "$(grep -c 'claude-qwen: created' <<<"$out")" 1
+expect "profiles: its key works" "$(models "$QK")" "alpha,other"
+out=$(pjob ,*, "$NEW" "$OK" "$QK")
+expect "profiles: * (every profile) checks every client" "$(grep -c 'already registered$' <<<"$out")" 3
+
 for bad in CHANGE_ME_LITELLM_KEY_HERMES sk-short "$MASTER"; do
   if job "$bad" "$OK" >/dev/null; then result FAIL "invalid Hermes key is rejected"
   else result PASS "invalid Hermes key is rejected"; fi

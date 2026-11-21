@@ -32,6 +32,13 @@ model_list:
   - model_name: second
     litellm_params: { model: openai/second, api_base: "http://127.0.0.1:9999/v1", api_key: x }
 YAML
+# a file of the bridge profile: run.sh loads it only while that profile is active
+cat >"$W/models/tagged.yaml" <<'YAML'
+# @profile bridge
+model_list:
+  - model_name: tagged
+    litellm_params: { model: openai/tagged, api_base: "http://127.0.0.1:9999/v1", api_key: x }
+YAML
 echo "not a model file" >"$W/models/README.md"
 cat >"$W/run.sh" <<'SH'
 python3 /t/upstream-recorder.py 9999 >/w/upstream.log 2>&1 &
@@ -65,7 +72,7 @@ post("/v1/messages", {"model": "qwen", "max_tokens": 5, "system": "S", "messages
 post("/v1/chat/completions", {"model": "qwen", "max_tokens": 5, "messages": [S("S"), U("a")]})
 PY
 SH
-docker run --rm -e LITELLM_MASTER_KEY=sk-test -e LITELLM_LOCAL_MODEL_COST_MAP=True --entrypoint sh \
+docker run --rm -e LITELLM_MASTER_KEY=sk-test -e LITELLM_LOCAL_MODEL_COST_MAP=True -e AS_PROFILES=,claude, --entrypoint sh \
   -v "$W/config.yaml:/app/config.yaml:ro" -v "$W/models:/app/models:ro" \
   -v "$REPO/tests/litellm/upstream-recorder.py:/t/upstream-recorder.py:ro" \
   -v "$REPO/litellm/run.sh:/scripts/run.sh:ro" -v "$W/run.sh:/t/run.sh:ro" -v "$W:/w" "$LITELLM" /t/run.sh
@@ -74,7 +81,21 @@ fail=0
 expect() {
   if [ "$2" = "$3" ]; then echo "ok   $1"; else echo "FAIL $1: got '$2', want '$3'"; fail=1; fi
 }
-expect "run.sh: every models/*.yaml loaded"        "$(cat "$W/models.txt" 2>/dev/null)" "qwen second"
+expect "run.sh: every models/*.yaml loaded, but a file of an inactive profile" "$(cat "$W/models.txt" 2>/dev/null)" "qwen second"
+# which files run.sh includes for each AS_PROFILES (",<COMPOSE_PROFILES>,"; unset outside Compose)
+printf '#!/bin/sh\nexit 0\n' >"$W/stub.sh"; chmod 755 "$W/stub.sh"
+included() { # included <AS_PROFILES|-unset->: model file names in the generated config
+  local e=(); [ "$1" = -unset- ] || e=(-e "AS_PROFILES=$1")
+  docker run --rm "${e[@]}" -e LITELLM_CONFIG_OUT=/w/inc.yaml --entrypoint sh -v "$W/config.yaml:/app/config.yaml:ro" \
+    -v "$W/models:/app/models:ro" -v "$REPO/litellm/run.sh:/scripts/run.sh:ro" -v "$W/stub.sh:/app/docker/prod_entrypoint.sh:ro" \
+    -v "$W:/w" "$LITELLM" /scripts/run.sh >/dev/null 2>&1
+  sed -n 's#^  - /app/models/##p' "$W/inc.yaml" | tr '\n' ' ' | sed 's/ $//'
+}
+expect "run.sh: profile bridge active -> its file"   "$(included ,claude,bridge,)" "second.yaml tagged.yaml test.yaml"
+expect "run.sh: every profile (*) -> its file"        "$(included ,*,)"             "second.yaml tagged.yaml test.yaml"
+expect "run.sh: no profile -> not its file"           "$(included ,,)"              "second.yaml test.yaml"
+expect "run.sh: AS_PROFILES unset (no Compose) -> all" "$(included -unset-)"        "second.yaml tagged.yaml test.yaml"
+expect "run.sh: a longer name is not the profile"     "$(included ,bridge2,)"       "second.yaml test.yaml"
 mapfile -t got <"$W/upstream.log"
 expect "messages, system blocks"                 "${got[0]:-}" "/v1/chat/completions system,user"
 expect "messages, conversation"                   "${got[1]:-}" "/v1/chat/completions system,user,assistant,user"

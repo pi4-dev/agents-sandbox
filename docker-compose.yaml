@@ -3,6 +3,14 @@
 # unless the data is copied over.
 name: agents-sandbox
 
+# Profiles (COMPOSE_PROFILES in .env; README, "Profiles"). Without a profile: the core
+# (as-squid, as-dns, as-ingress, as-litellm, its database and keys job, as-llm-gw).
+#   claude   as-claude-main        qwen     as-claude-qwen       hermes  as-hermes
+#   bridge   as-claude-bridge      headroom as-headroom          webui   as-open-webui
+#   debug    as-netshoot           (as-zenoh runs with claude, qwen or hermes)
+# Each agent's firewall sidecar has the agent's profile. Set profiles in .env, not with
+# --profile: as-litellm, as-litellm-keys and as-llm-gw read them from COMPOSE_PROFILES.
+
 x-fw-sidecar: &fw-sidecar
   image: ${NETSHOOT_IMAGE:-nicolaka/netshoot:latest}
   init: true
@@ -80,6 +88,7 @@ services:
   as-hermes-net:
     <<: *fw-sidecar
     container_name: as-hermes-net
+    profiles: [hermes]
     hostname: hermes
     environment:
       <<: *fw-env
@@ -104,6 +113,7 @@ services:
   as-hermes:
     image: ${HERMES_IMAGE:-nousresearch/hermes-agent:stable}
     container_name: as-hermes
+    profiles: [hermes]
     restart: unless-stopped
 
     # Keep the official entrypoint (s6-overlay). Do NOT set user: 0:0.
@@ -188,6 +198,7 @@ services:
   as-open-webui:
     image: ${OPEN_WEBUI_IMAGE:-ghcr.io/open-webui/open-webui:main}
     container_name: as-open-webui
+    profiles: [webui]
     restart: unless-stopped
     env_file:
       - open-webui/open-webui.env
@@ -223,6 +234,8 @@ services:
       HTTPS_PROXY: *litellm-proxy
       http_proxy: *litellm-proxy
       https_proxy: *litellm-proxy
+      # active profiles: litellm/run.sh skips model files of the others (# @profile <name>)
+      AS_PROFILES: &as-profiles ",${COMPOSE_PROFILES:-},"
       # the healthcheck's path stays out of the access log (litellm/logs, docker logs)
       LITELLM_DISABLE_ACCESS_LOG_PATHS: /health/liveliness
     # Docker's embedded DNS answers the aliases of LiteLLM's networks (as-litellm-db,
@@ -231,7 +244,7 @@ services:
     dns_search: [as.internal]
     depends_on:
       as-dns: { condition: service_started }
-      as-claude-bridge: { condition: service_started }
+      as-claude-bridge: { condition: service_started, required: false }   # profile bridge
       as-litellm-db: { condition: service_healthy }
     networks:
       as-net-blind:
@@ -276,7 +289,9 @@ services:
     environment:
       LITELLM_URL: http://as-litellm:4000
       # alias in LiteLLM = env variable holding the key
-      LITELLM_CLIENT_KEYS: "hermes=LITELLM_API_KEY open-webui=OPENAI_API_KEY claude-qwen=ANTHROPIC_AUTH_TOKEN"
+      # alias=VARIABLE@profile: registered only while that profile is active
+      LITELLM_CLIENT_KEYS: "hermes=LITELLM_API_KEY@hermes open-webui=OPENAI_API_KEY@webui claude-qwen=ANTHROPIC_AUTH_TOKEN@qwen"
+      AS_PROFILES: *as-profiles
     volumes:
       - ./litellm/litellm-keys.py:/scripts/litellm-keys.py:ro
     networks:
@@ -296,6 +311,8 @@ services:
     restart: unless-stopped
     env_file:
       - headroom/headroom.env        # HEADROOM_PROXY_TOKEN, sent to as-headroom
+    environment:
+      AS_PROFILES: *as-profiles      # chat through as-headroom only with its profile (llm-gw/Caddyfile)
     user: "${LOGS_UID:-1000}:${LOGS_GID:-1000}"     # owner of llm-gw/logs on the host
     volumes:
       - ./llm-gw:/etc/caddy:ro       # Caddyfile (a directory: edits are seen)
@@ -304,7 +321,7 @@ services:
     dns: ["${DNS_IP}"]
     depends_on:
       as-dns: { condition: service_started }
-      as-headroom: { condition: service_started }
+      as-headroom: { condition: service_started, required: false }        # profile headroom
     networks:
       as-net-blind:
         aliases: [llm.as.internal]
@@ -324,6 +341,7 @@ services:
   as-headroom:
     image: ${HEADROOM_IMAGE:-ghcr.io/headroomlabs-ai/headroom:0.42.0}
     container_name: as-headroom
+    profiles: [headroom]
     restart: unless-stopped
     user: "${LOGS_UID:-1000}:${LOGS_GID:-1000}"     # owner of headroom/data on the host
     env_file:
@@ -391,6 +409,7 @@ services:
   as-zenoh:
     image: eclipse/zenoh:${ZENOH_VERSION:-1.10.2}
     container_name: as-zenoh
+    profiles: [claude, qwen, hermes]
     restart: unless-stopped
     entrypoint: ["/bin/sh", "/etc/zenoh/run.sh"]
     env_file:
@@ -513,6 +532,7 @@ services:
   as-netshoot-net:
     <<: *fw-sidecar
     container_name: as-netshoot-net
+    profiles: [debug]
     hostname: as-netshoot-net
     environment:
       <<: *fw-env
@@ -531,6 +551,7 @@ services:
   as-netshoot:
     image: ${NETSHOOT_IMAGE:-nicolaka/netshoot:latest}
     container_name: as-netshoot
+    profiles: [debug]
     init: true
     depends_on:
       as-netshoot-net:
@@ -563,6 +584,7 @@ services:
   as-claude-net:
     <<: *fw-sidecar
     container_name: as-claude-net
+    profiles: [claude]
     hostname: claude
     environment:
       <<: *fw-env
@@ -582,6 +604,7 @@ services:
   as-claude-main:
     <<: [*claude-image, *agent-hardening]
     container_name: as-claude-main
+    profiles: [claude]
     network_mode: service:as-claude-net
     depends_on:
       as-claude-net:
@@ -613,6 +636,7 @@ services:
   as-claude-qwen-net:
     <<: *fw-sidecar
     container_name: as-claude-qwen-net
+    profiles: [qwen]
     hostname: claude-qwen
     environment:
       <<: *fw-env
@@ -631,6 +655,7 @@ services:
   as-claude-qwen:
     <<: [*claude-image, *agent-hardening]
     container_name: as-claude-qwen
+    profiles: [qwen]
     network_mode: service:as-claude-qwen-net
     depends_on:
       as-claude-qwen-net: { condition: service_healthy }
@@ -642,14 +667,14 @@ services:
     environment:
       # the Anthropic API of LiteLLM (/v1/messages) through as-llm-gw; no Anthropic login
       ANTHROPIC_BASE_URL: http://llm.as.internal:4000
-      ANTHROPIC_MODEL: &claude-qwen-model ${CLAUDE_QWEN_MODEL:?set it in .env (a model_name from litellm/models)}
+      ANTHROPIC_MODEL: &claude-qwen-model ${CLAUDE_QWEN_MODEL:-}
       ANTHROPIC_DEFAULT_OPUS_MODEL: *claude-qwen-model
       ANTHROPIC_DEFAULT_SONNET_MODEL: *claude-qwen-model
       ANTHROPIC_DEFAULT_HAIKU_MODEL: *claude-qwen-model
       CLAUDE_CODE_SUBAGENT_MODEL: *claude-qwen-model
       CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"
       # the model's real window: Claude Code assumes 200k for a model it does not know
-      CLAUDE_CODE_MAX_CONTEXT_TOKENS: ${CLAUDE_QWEN_CONTEXT_TOKENS:?set it in .env (the model's context window in tokens)}
+      CLAUDE_CODE_MAX_CONTEXT_TOKENS: ${CLAUDE_QWEN_CONTEXT_TOKENS:-}
       CLAUDE_CODE_EFFORT_LEVEL: medium        # pinned: overrides /effort and settings in the session
       # message bus (as-zenoh); the password is ZENOH_PASSWORD_CLAUDE_QWEN in its env file
       ZENOH_CONNECT: tcp/zenoh.as.internal:7447
@@ -670,6 +695,7 @@ services:
   as-claude-bridge-net:
     <<: *fw-sidecar
     container_name: as-claude-bridge-net
+    profiles: [bridge]
     hostname: claude-bridge
     environment:
       <<: *fw-env
@@ -699,6 +725,7 @@ services:
     image: agents-sandbox/claude-bridge
     pull_policy: build                     # code and proxy CA are baked in
     container_name: as-claude-bridge
+    profiles: [bridge]
     init: true
     network_mode: service:as-claude-bridge-net
     depends_on:

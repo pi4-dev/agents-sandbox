@@ -6,23 +6,23 @@ Docker Compose homelab for AI coding agents with a shared LiteLLM API, an HTTPS-
 
 ## Components
 
-| Component | Purpose |
-| --- | --- |
-| `as-claude-main`, `as-claude-net` | Claude Code agent and its network-namespace firewall |
-| `as-claude-bridge`, `as-claude-bridge-net` | OpenAI-compatible bridge (Claude Agent SDK, subscription login) for LiteLLM's `claude-sub` model, independent of the agent: own image with the code read-only, env, directories and firewall (`:9090` from LiteLLM only) ([details](docs/CLAUDE_BRIDGE.md)) |
-| `as-claude-qwen`, `as-claude-qwen-net` | Claude Code on a LiteLLM model (`CLAUDE_QWEN_MODEL`), like Hermes: LiteLLM through `as-llm-gw` with its own key, on the message bus |
-| `as-hermes`, `as-hermes-net` | Hermes Agent and its network-namespace firewall |
-| `as-netshoot`, `as-netshoot-net` | Network diagnostics: reaches everything in `as-net-blind` on any port and by ping, the sidecar-protected containers included (they admit it with `ALLOW_IN any::netshoot.as.internal`); nothing can connect to it |
-| `as-squid` | Central HTTPS proxy and TLS inspection; the only way out of `as-net-blind` |
-| `as-ingress` | Reverse proxy (Caddy) for the GUIs, with a dashboard of links to them (`:80`); the only way into `as-net-blind` |
-| `as-dns` | Internal DNS (CoreDNS): only `*.as.internal`, no recursion, every query logged |
-| `as-litellm` | Shared API routing to LLM models |
-| `as-litellm-keys` | One-shot job: registers the pre-generated client keys in LiteLLM |
-| `as-zenoh` | Message bus of the agents (Zenoh router, `zenoh.as.internal:7447`): a login and an ACL per system, every message logged to `zenoh/logs/` on the host |
-| `as-llm-gw` | The agents' way to LiteLLM (Caddy, `llm.as.internal:4000`): only the client-key routes, without the response headers that describe the upstream; chat and messages through `as-headroom` |
-| `as-headroom` | Context compression ([Headroom](https://github.com/headroomlabs-ai/headroom)) between `as-llm-gw` and LiteLLM: tool outputs, logs, JSON and history shrink before they reach the model; Hugging Face models through its own Squid leg |
-| `as-litellm-db` | PostgreSQL on a Docker `internal` network |
-| `as-open-webui` | Web UI for models |
+| Component | Profile | Purpose |
+| --- | --- | --- |
+| `as-claude-main`, `as-claude-net` | `claude` | Claude Code agent and its network-namespace firewall |
+| `as-claude-bridge`, `as-claude-bridge-net` | `bridge` | OpenAI-compatible bridge (Claude Agent SDK, subscription login) for LiteLLM's `claude-sub` model, independent of the agent: own image with the code read-only, env, directories and firewall (`:9090` from LiteLLM only) ([details](docs/CLAUDE_BRIDGE.md)) |
+| `as-claude-qwen`, `as-claude-qwen-net` | `qwen` | Claude Code on a LiteLLM model (`CLAUDE_QWEN_MODEL`), like Hermes: LiteLLM through `as-llm-gw` with its own key, on the message bus |
+| `as-hermes`, `as-hermes-net` | `hermes` | Hermes Agent and its network-namespace firewall |
+| `as-netshoot`, `as-netshoot-net` | `debug` | Network diagnostics: reaches everything in `as-net-blind` on any port and by ping, the sidecar-protected containers included (they admit it with `ALLOW_IN any::netshoot.as.internal`); nothing can connect to it |
+| `as-squid` | core | Central HTTPS proxy and TLS inspection; the only way out of `as-net-blind` |
+| `as-ingress` | core | Reverse proxy (Caddy) for the GUIs, with a dashboard of links to them (`:80`); the only way into `as-net-blind` |
+| `as-dns` | core | Internal DNS (CoreDNS): only `*.as.internal`, no recursion, every query logged |
+| `as-litellm` | core | Shared API routing to LLM models |
+| `as-litellm-keys` | core | One-shot job: registers the pre-generated client keys in LiteLLM |
+| `as-zenoh` | `claude`, `qwen`, `hermes` | Message bus of the agents (Zenoh router, `zenoh.as.internal:7447`): a login and an ACL per system, every message logged to `zenoh/logs/` on the host |
+| `as-llm-gw` | core | The agents' way to LiteLLM (Caddy, `llm.as.internal:4000`): only the client-key routes, without the response headers that describe the upstream; chat and messages through `as-headroom` |
+| `as-headroom` | `headroom` | Context compression ([Headroom](https://github.com/headroomlabs-ai/headroom)) between `as-llm-gw` and LiteLLM: tool outputs, logs, JSON and history shrink before they reach the model; Hugging Face models through its own Squid leg |
+| `as-litellm-db` | core | PostgreSQL on a Docker `internal` network |
+| `as-open-webui` | `webui` | Web UI for models |
 
 ## Repository layout
 
@@ -31,7 +31,7 @@ docker-compose.yaml            Compose topology and network definitions
 compose.hermes-privileged.yaml Opt-in full-trust (privileged) mode for Hermes
 .env.example                   All addressing and optional overrides (copy to .env)
 proxy.env                      Agent proxy variables (by name)
-run-first.sh                   Generate missing secrets, create directories, check env files, start everything
+run-first.sh                   Generate missing secrets, create directories, check env files, start the profiles
 start-claude-main.sh           Claude Code session in the Claude agent (as-claude-main, Remote Control)
 start-claude-qwen.sh           Claude Code session in Claude on Qwen (as-claude-qwen)
 gen-secrets.sh                 Create env files from the examples, fill generated CHANGE_ME_* values
@@ -133,9 +133,47 @@ In short:
 5. Create the proxy CA: `ssl/init_ca.sh` (needs `sudo` to hand the key to UID 13).
    `check-env.sh` fails without it ([Proxy CA](#proxy-ca)).
 6. Validate: `tests/compose/validate.sh`, then `docker compose config -q` with your real files.
-7. Start: `./run-first.sh` (or `./check-env.sh && docker compose up -d`), then the agent
+7. Choose what runs: `COMPOSE_PROFILES` in `.env` ([Profiles](#profiles); the example runs
+   everything but `debug`). With `qwen`, also set `CLAUDE_QWEN_MODEL` and
+   `CLAUDE_QWEN_CONTEXT_TOKENS`.
+8. Start: `./run-first.sh` (or `./check-env.sh && docker compose up -d`), then the agent
    sessions: `./start-claude-main.sh` (Claude agent), `./start-claude-qwen.sh` (Claude on Qwen).
-8. If you use the Claude bridge, set it up in its own directories and give it its own login ([CLAUDE_BRIDGE.md](docs/CLAUDE_BRIDGE.md), "Setting up the bridge").
+9. If you use the Claude bridge, set it up in its own directories and give it its own login ([CLAUDE_BRIDGE.md](docs/CLAUDE_BRIDGE.md), "Setting up the bridge").
+
+### Profiles
+
+The core always runs: `as-squid`, `as-dns`, `as-ingress`, `as-litellm` with its database and
+keys job, `as-llm-gw`. Everything else belongs to a [Compose profile](https://docs.docker.com/compose/how-tos/profiles/),
+chosen by `COMPOSE_PROFILES` in `.env` (comma-separated, `*` = all):
+
+| Profile | Starts | Without it |
+| --- | --- | --- |
+| `claude` | `as-claude-main` (Claude agent) | |
+| `qwen` | `as-claude-qwen` (Claude on Qwen); needs `CLAUDE_QWEN_MODEL`, `CLAUDE_QWEN_CONTEXT_TOKENS` | its LiteLLM key is not registered |
+| `hermes` | `as-hermes` | its LiteLLM key is not registered |
+| `bridge` | `as-claude-bridge` | LiteLLM does not offer `claude-sub` (`litellm/models/claude-local.yaml` has `# @profile bridge`) |
+| `headroom` | `as-headroom` | `as-llm-gw` sends chat and messages to LiteLLM directly, uncompressed |
+| `webui` | `as-open-webui` | its LiteLLM key is not registered; ingress `:8080` answers 502 |
+| `debug` | `as-netshoot` (reaches everything in `as-net-blind`) | off in `.env.example`: only on request |
+
+`as-zenoh` runs with `claude`, `qwen` or `hermes`; each agent's firewall sidecar has the
+agent's profile.
+
+- **Set profiles in `.env`, not with `--profile`.** Compose passes `COMPOSE_PROFILES` to the
+  three core containers that adapt to it (`AS_PROFILES`): LiteLLM skips model files of other
+  profiles (`# @profile <name>` in the file), `as-litellm-keys` registers only active clients,
+  `as-llm-gw` uses Headroom only with its profile. `--profile` starts the services but
+  leaves those three as they were. `docker compose up -d as-netshoot` (a service named on
+  the command line) works the same way: it starts, nothing else changes.
+- **After a change:** `docker compose up -d` starts what was added and recreates those three.
+  It does not stop what you dropped: `docker compose stop <service>` (or `docker compose down`
+  and up again).
+- **`check-env.sh`** fails on an unknown profile name, a missing `COMPOSE_PROFILES` and, with
+  `qwen`, empty Qwen settings; it warns when Hermes' model or `CLAUDE_QWEN_MODEL` comes from
+  a profile that is off (e.g. `claude-sub` without `bridge`).
+- **Upgrading from before profiles:** add `COMPOSE_PROFILES` to `.env`. What ran before:
+  `COMPOSE_PROFILES=claude,qwen,hermes,bridge,headroom,webui,debug`. Without it only the core starts.
+- The ingress dashboard (`:80`) lists every GUI; one whose profile is off answers 502.
 
 ### Changing addressing
 
@@ -199,6 +237,8 @@ Hermes, Claude on Qwen -> as-llm-gw -> as-headroom:8787 -> as-litellm:4000
   half and left the same content on the Anthropic path (`/v1/messages`) unchanged.
 - **Like LiteLLM, it has no firewall sidecar:** on `as-net-blind` it could reach other
   services and Squid's agent leg (`proxy.as.internal`, the agents' allowlist).
+- **Off:** drop `headroom` from `COMPOSE_PROFILES`, then `docker compose up -d` and
+  `docker compose stop as-headroom`: `as-llm-gw` then sends these routes to LiteLLM.
 - **Rollback:** in `llm-gw/Caddyfile` point `@compressed` at `litellm.as.internal:4000`
   (or delete the `handle @compressed` block), then `docker compose restart as-llm-gw`.
 - **Tests:** `tests/headroom/run-headroom-tests.sh` (gateway, Headroom, real LiteLLM),
@@ -244,6 +284,7 @@ Claude Code on a model of LiteLLM, the way Hermes reaches its model:
 - `ANTHROPIC_AUTH_TOKEN` in `claude-qwen/claude-qwen.env`: its own LiteLLM key (alias
   `claude-qwen`), generated by `gen-secrets.sh`, registered by `as-litellm-keys`. No
   Anthropic login. Restrict the key to the model in the LiteLLM UI ("To restrict a client").
+- Profile `qwen` ([Profiles](#profiles)).
 - `CLAUDE_QWEN_MODEL` in `.env`: the `model_name` from `litellm/models/*.yaml`
   (e.g. your Qwen3.8-27B-Claude-Code deployment). Claude Code uses it for every slot
   (main, opus, sonnet, haiku, subagents).
@@ -479,7 +520,8 @@ Known limitations:
   (the first seconds after `as-zenoh` starts) is not logged.
 - **PyPI is allowlisted** (read-only, for the bus client): like npm, any package an agent
   installs runs its code in that agent's container.
-- **`as-netshoot` reaches everything** in `as-net-blind`, and the sidecars admit it.
+- **`as-netshoot` reaches everything** in `as-net-blind`, and the sidecars admit it. It runs
+  only with the `debug` profile, which `.env.example` leaves off.
   Whoever can `docker exec` already controls every container; the bridge still
   requires `CLAUDE_OAI_KEY`. Nothing can connect to netshoot.
 - **`as-dns` has no healthcheck** (a periodic lookup would fill its query log). It fails

@@ -7,7 +7,12 @@ accept exactly those values, so the stack starts in one `docker compose up`.
 
   LITELLM_URL          LiteLLM base URL (default http://as-litellm:4000)
   LITELLM_MASTER_KEY   admin key
-  LITELLM_CLIENT_KEYS  "alias=ENV_VAR ...", e.g. "hermes=LITELLM_API_KEY"
+  LITELLM_CLIENT_KEYS  "alias=ENV_VAR[@profile] ...", e.g. "hermes=LITELLM_API_KEY@hermes":
+                       a client with a profile is registered only while that Compose
+                       profile is active
+  AS_PROFILES          ",<COMPOSE_PROFILES>," (docker-compose.yaml); unset: every profile.
+                       A client whose profile is off is left as it is in LiteLLM (not
+                       created, not deleted), so turning the profile on again needs nothing.
   LITELLM_CLIENT_ROUTES  routes the client keys may call, space-separated (default: chat
                        and text completions, Anthropic messages (Claude Code), the
                        model list; no embeddings, which no
@@ -126,11 +131,24 @@ def ensure(alias, key):
     print(f"litellm-keys: {alias}: rotated (old key deleted, settings kept)")
 
 
+def active(profile):
+    """True if the Compose profile is on: listed in AS_PROFILES or "*" (unset: every profile)."""
+    profiles = os.environ.get("AS_PROFILES")
+    if profiles is None:
+        return True
+    names = {p.strip() for p in profiles.split(",")}
+    return profile in names or "*" in names
+
+
 def main():
     if not MASTER:
         sys.exit("litellm-keys: LITELLM_MASTER_KEY is not set")
     for item in os.environ.get("LITELLM_CLIENT_KEYS", "").split():
         alias, _, var = item.partition("=")
+        var, _, profile = var.partition("@")
+        if profile and not active(profile):
+            print(f"litellm-keys: {alias}: skipped (profile {profile} is not active)")
+            continue
         key = os.environ.get(var, "")
         if not key.startswith("sk-") or len(key) < 16 or "CHANGE_ME" in key:
             sys.exit(f"litellm-keys: {var} for '{alias}' must be a generated sk-... key "
