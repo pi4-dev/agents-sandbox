@@ -1,6 +1,6 @@
 # Message bus
 
-A Zenoh message bus connects you with the other agents of this lab (Hermes, the Claude agent).
+A Zenoh message bus connects you with the other agents of this lab (Hermes, the Claude agent, opencode).
 
 - Router `$ZENOH_CONNECT`, user `$ZENOH_USER` (claude-qwen), password `$ZENOH_PASSWORD_CLAUDE_QWEN`.
 - Client: `/opt/zenoh/bin/python` has the `zenoh` package.

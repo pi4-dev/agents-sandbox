@@ -21,7 +21,7 @@ cp "$W/.env.example" "$W/.env"
 while IFS= read -r -d '' f; do
   cp "$f" "${f%.example}"
 done < <(find "$W" -name '*.env.example' -print0)
-for f in "$W"/squid/conf/*.example "$W"/hermes/config.yaml.example; do cp "$f" "${f%.example}"; done
+for f in "$W"/squid/conf/*.example "$W"/hermes/config.yaml.example "$W"/opencode/opencode.jsonc.example; do cp "$f" "${f%.example}"; done
 
 cd "$W"
 # the core alone: no profile, the examples untouched (CLAUDE_QWEN_* empty) must render
@@ -78,7 +78,8 @@ WANT_PROFILES = {
     "as-claude-net": ["claude"], "as-claude-main": ["claude"], "as-claude-qwen-net": ["qwen"], "as-claude-qwen": ["qwen"],
     "as-hermes-net": ["hermes"], "as-hermes": ["hermes"], "as-claude-bridge-net": ["bridge"], "as-claude-bridge": ["bridge"],
     "as-headroom": ["headroom"], "as-open-webui": ["webui"], "as-netshoot-net": ["debug"], "as-netshoot": ["debug"],
-    "as-zenoh": ["claude", "hermes", "qwen"],
+    "as-zenoh": ["claude", "hermes", "opencode", "qwen"],
+    "as-opencode-net": ["opencode"], "as-opencode": ["opencode"],
 }
 check(sorted(core_cfg["services"]) == CORE, f"no profile: only the core {sorted(core_cfg['services'])}")
 check(sorted(svc) == sorted(CORE + list(WANT_PROFILES)), "every service is in the core or has a profile")
@@ -98,7 +99,7 @@ for name, s in svc.items():
             check(d.get("required") is False, f"{name} -> {dep}: optional (required: false; {dep} has profiles {sorted(theirs)})")
 default_svcs = set(default_cfg["services"])
 check("as-netshoot" not in default_svcs and {"as-claude-main", "as-hermes", "as-claude-qwen", "as-claude-bridge",
-      "as-headroom", "as-open-webui"} <= default_svcs,
+      "as-headroom", "as-open-webui", "as-opencode"} <= default_svcs,
       ".env.example: every profile but debug (as-netshoot only on request)")
 for name in ["as-litellm", "as-litellm-keys", "as-llm-gw"]:
     check((svc[name].get("environment") or {}).get("AS_PROFILES") == ",*,"
@@ -131,7 +132,7 @@ for name, s in svc.items():
 want_aliases = {
     "as-dns": "dns", "as-squid": "proxy", "as-litellm": "litellm", "as-open-webui": "open-webui",
     "as-hermes-net": "hermes", "as-netshoot-net": "netshoot", "as-ingress": "ingress",
-    "as-claude-net": "claude dev-ws01", "as-claude-bridge-net": "claude-bridge", "as-claude-qwen-net": "claude-qwen", "as-llm-gw": "llm", "as-zenoh": "zenoh",
+    "as-claude-net": "claude dev-ws01", "as-claude-bridge-net": "claude-bridge", "as-claude-qwen-net": "claude-qwen", "as-opencode-net": "opencode", "as-llm-gw": "llm", "as-zenoh": "zenoh",
 }
 for name, want in want_aliases.items():
     for a in want.split():
@@ -151,7 +152,7 @@ for name in [n for n in svc if n.endswith("-net")]:
     check("as-dns" in svc[name].get("depends_on", {}), f"{name}: starts after as-dns")
     check("dns" not in svc[name], f"{name}: no Docker-managed DNS (fw.sh writes resolv.conf)")
 
-for name in ["as-hermes", "as-claude-main", "as-claude-bridge", "as-claude-qwen", "as-netshoot"]:
+for name in ["as-hermes", "as-claude-main", "as-claude-bridge", "as-claude-qwen", "as-opencode", "as-netshoot"]:
     check(env[name].get("HTTPS_PROXY") == proxy, f"{name}: HTTPS_PROXY is {proxy}")
 for k in ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"]:
     check(env["as-litellm"].get(k) == llm_proxy, f"as-litellm: {k} is {llm_proxy} (its own leg)")
@@ -254,7 +255,7 @@ check(env["as-netshoot-net"].get("ALLOW_OUT") == f"any:{blind_subnet}" and not e
       "as-netshoot-net: everything out to as-net-blind, nothing inbound")
 check("healthcheck" in bridge, "as-claude-bridge: has a healthcheck")
 check("healthcheck" in svc["as-squid"], "as-squid: has a healthcheck")
-for name in ["as-squid", "as-claude-main", "as-claude-bridge"]:
+for name in ["as-squid", "as-claude-main", "as-claude-bridge", "as-opencode"]:
     check(svc[name].get("pull_policy") == "build", f"{name}: image rebuilt on every up (files baked in)")
 
 squid_mounts = {v["target"]: v for v in svc["as-squid"]["volumes"]}
@@ -268,7 +269,7 @@ for name in ["as-litellm", "as-open-webui", "as-ingress", "as-llm-gw", "as-zenoh
 check("dns" not in svc["as-squid"] and env["as-squid"].get("SQUID_DNS_UPSTREAM"),
       "as-squid: resolves internet names itself (SQUID_DNS_UPSTREAM)")
 # --- hardening: the Claude agents without capabilities, the sidecars with iptables' only ---
-for name in ["as-claude-main", "as-claude-qwen"]:
+for name in ["as-claude-main", "as-claude-qwen", "as-opencode"]:
     s = svc[name]
     check(s.get("cap_drop") == ["ALL"] and not s.get("cap_add"), f"{name}: no capabilities (no NET_RAW next to the sidecar)")
     check("no-new-privileges:true" in (s.get("security_opt") or []), f"{name}: no-new-privileges")
@@ -399,6 +400,45 @@ check(re.search(r"(?m)^\s*reverse_proxy litellm\.as\.internal:4000 \{", gw_cfg) 
       "as-llm-gw: those routes to LiteLLM, everything else a 404")
 check(re.search(r"(?m)^\s*header_down -llm_provider-\*\s*$", gw_cfg) and re.search(r"(?m)^\s*header_down -x-litellm-model-\*\s*$", gw_cfg),
       "as-llm-gw: drops the llm_provider-* and x-litellm-model-* response headers")
+# --- as-opencode: opencode on a LiteLLM model, like Claude on Qwen ---
+oc, oce = svc["as-opencode"], env["as-opencode"]
+check(oc.get("network_mode") == "service:as-opencode-net", "as-opencode: behind as-opencode-net")
+check(env["as-opencode-net"].get("ALLOW_OUT") == "tcp:llm.as.internal:4000 tcp:zenoh.as.internal:7447"
+      and env["as-opencode-net"].get("ALLOW_IN") == "any::netshoot.as.internal",
+      "as-opencode-net: out only to as-llm-gw and the bus, in only from netshoot")
+oc_mounts = {v["target"]: v for v in oc.get("volumes", [])}
+ocm = oc_mounts.get("/etc/opencode/opencode.jsonc", {})
+check(ocm.get("read_only") is True and ocm.get("source", "").endswith("/opencode/opencode.jsonc")
+      and re.search(r"source: \./opencode/opencode\.jsonc\n\s+target: /etc/opencode/opencode\.jsonc\n\s+read_only: true\n\s+bind:\n\s+create_host_path: false\n", compose_src),
+      "as-opencode: opencode.jsonc read-only in the managed scope (/etc/opencode), never created by Docker")
+check(not [t2 for t2 in oc_mounts if t2.startswith("/etc/opencode") and t2 != "/etc/opencode/opencode.jsonc"],
+      "as-opencode: nothing else in /etc/opencode")
+check(oc_mounts.get("/home/node/.config/opencode/AGENTS.md", {}).get("read_only") is True,
+      "as-opencode: its AGENTS.md (environment, message bus) read-only")
+check(not [v for v in oc["volumes"] if re.search(r"claude-main/|claude-qwen/|hermes/", v.get("source", ""))],
+      "as-opencode: own workspace and home, nothing of the other agents")
+check(oce.get("OPENCODE_LITELLM_KEY") and env["as-litellm-keys"].get("OPENCODE_LITELLM_KEY") == oce.get("OPENCODE_LITELLM_KEY")
+      and "opencode=OPENCODE_LITELLM_KEY@opencode" in env["as-litellm-keys"].get("LITELLM_CLIENT_KEYS", "").split(),
+      "as-litellm-keys: registers the opencode key (profile opencode)")
+check(oce.get("ZENOH_USER") == "opencode" and oce.get("ZENOH_PASSWORD_OPENCODE"), "as-opencode: on the bus as opencode")
+check(oce.get("NODE_EXTRA_CA_CERTS") == "/usr/local/share/ca-certificates/proxy-ca.crt", "as-opencode: trusts the proxy CA")
+check(oc.get("build", {}).get("context", "").endswith("/opencode") and oc.get("image") == "agents-sandbox/opencode"
+      and re.fullmatch(r"\d+\.\d+\.\d+", str(oc.get("build", {}).get("args", {}).get("OPENCODE_VERSION", ""))),
+      "as-opencode: its own image, opencode pinned (OPENCODE_VERSION)")
+ocj = re.sub(r"(?m)^\s*//.*$", "", open("opencode/opencode.jsonc.example").read())
+ocj = json.loads(ocj)
+prov = ocj.get("providers", {})
+check(list(prov) == ["litellm"] and prov["litellm"]["settings"]["baseURL"] == "http://llm.as.internal:4000/v1"
+      and prov["litellm"].get("env") == ["OPENCODE_LITELLM_KEY"],
+      "opencode.jsonc: one provider, LiteLLM through as-llm-gw, its own key")
+pol = [(p["action"], p["resource"], p["effect"]) for p in ocj.get("policies", [])]
+check(pol[:2] == [("provider.use", "*", "deny"), ("provider.use", "litellm", "allow")]
+      and not [p for p in pol if p[0].startswith("integration.") and p[1] == "*" and p[2] == "deny"],
+      "opencode.jsonc: policies deny every provider but litellm (no integration.* deny: it removes litellm too)")
+check(ocj.get("update") == "disable" and ocj.get("share") == "disabled" and ocj.get("lsp") is False and ocj.get("formatter") is False,
+      "opencode.jsonc: no update, no session sharing, no LSP or formatter downloads")
+check(ocj.get("model", "").startswith("litellm/"), "opencode.jsonc: the default model is a LiteLLM one")
+
 # --- as-headroom: compression between as-llm-gw and LiteLLM ---
 hr, hre = svc["as-headroom"], env["as-headroom"]
 check(re.search(r"^ghcr\.io/headroomlabs-ai/headroom:\d+\.\d+\.\d+$", hr.get("image", "")) is not None,

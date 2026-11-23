@@ -1,6 +1,7 @@
 #!/bin/sh
 # Prepare and start the environment: secrets, bind-mounted directories, env
-# checks, every container. Agent sessions: ./start-claude-main.sh, ./start-claude-qwen.sh.
+# checks, every container. Agent sessions: ./start-claude-main.sh, ./start-claude-qwen.sh,
+# ./start-opencode.sh.
 set -eu
 cd "$(dirname "$0")"
 
@@ -12,6 +13,7 @@ cd "$(dirname "$0")"
 mkdir -p claude-main/data/workspace claude-main/data/claude-home/.claude \
          claude-bridge/workspace claude-bridge/home/.claude \
          claude-qwen/data/workspace claude-qwen/data/claude-home/.claude \
+         opencode/data/workspace opencode/data/home/.config/opencode \
          hermes/data hermes/workspace zenoh/logs dns/logs ingress/logs llm-gw/logs litellm/logs \
          headroom/data
 ./check-env.sh                # placeholders, values that must match, directory owners

@@ -104,10 +104,10 @@ BLIND=${COMPOSE_PROJECT_NAME}_as-net-blind VLAN=${COMPOSE_PROJECT_NAME}_as-net-v
 
 docker compose build -q as-squid
 docker compose up -d --quiet-pull as-dns as-squid as-ingress as-llm-gw as-zenoh as-netshoot-net as-netshoot \
-  as-hermes-net as-claude-net as-claude-bridge-net as-claude-qwen-net
+  as-hermes-net as-claude-net as-claude-bridge-net as-claude-qwen-net as-opencode-net
 docker compose up -d --no-deps as-open-webui as-hermes as-litellm as-claude-main as-claude-bridge
 
-SIDECARS=(as-netshoot-net as-hermes-net as-claude-net as-claude-bridge-net as-claude-qwen-net)
+SIDECARS=(as-netshoot-net as-hermes-net as-claude-net as-claude-bridge-net as-claude-qwen-net as-opencode-net)
 FAIL=0
 result() { printf '%s  %s\n' "$1" "$2"; [ "$1" = PASS ] || FAIL=$((FAIL + 1)); }
 check() { # check <description> <command...>: the command succeeds
@@ -216,6 +216,25 @@ got=$(status as-claude-qwen-net http://llm.as.internal:4000/openapi.json)
 check "Claude on Qwen -> as-llm-gw /openapi.json -> 404 (got $got)" test "$got" = 404
 got=$(status as-claude-qwen-net http://litellm.as.internal:4000/v1/models)
 check "Claude on Qwen -> LiteLLM directly is dropped (got $got)" test "$got" = 000
+# as-opencode: OpenAI-compatible chat through as-llm-gw (Headroom), nothing of LiteLLM directly
+got=$(status as-opencode-net http://llm.as.internal:4000/v1/models)
+check "opencode -> as-llm-gw /v1/models -> LiteLLM (got $got)" test "$got" = 200
+got=$(docker exec as-opencode-net curl -s -o /dev/null -w '%{http_code}' --noproxy '*' --max-time 20 -H 'content-type: application/json' \
+        -d '{"model":"m","messages":[{"role":"user","content":"hi from opencode"}]}' http://llm.as.internal:4000/v1/chat/completions || true)
+check "opencode -> as-llm-gw /v1/chat/completions -> Headroom (got $got)" \
+  grep -q 'path=/v1/chat/completions ' <<<"$(docker logs as-headroom 2>&1)"
+got=$(status as-opencode-net http://litellm.as.internal:4000/v1/models)
+check "opencode -> LiteLLM directly is dropped (got $got)" test "$got" = 000
+got=$(status as-opencode-net http://headroom.as.internal:8787/v1/models)
+check "opencode -> Headroom directly is dropped (got $got)" test "$got" = 000
+# its model catalog (https only, path_domains + allowed_urls). Squid opens every tunnel and
+# decides on the decrypted request, so read that answer (-k: the sidecar does not trust the
+# proxy CA; test only): 503 = passed the ACLs, then no DNS in this test; 403 = refused
+bumped() { docker exec as-opencode-net curl -sk -o /dev/null -w '%{http_code}' --max-time 45 -x http://proxy.as.internal:3128 "$1" || true; }
+got=$(bumped https://models.opencode.ai/experimental/v2.0/api.json)
+check "opencode -> models.opencode.ai catalog passes Squid's ACL (503: no DNS here; got $got)" test "$got" = 503
+got=$(bumped https://opencode.ai/update/api/latest)
+check "opencode -> opencode.ai (updates, sharing) -> 403 (got $got)" test "$got" = 403
 gwlog=$(cat llm-gw/logs/access.log 2>/dev/null || true)
 check "llm-gw/logs/access.log has Hermes' /v1/models (200)" \
   grep -qE '"uri":"/v1/models".*"status":200' <<<"$gwlog"
@@ -272,6 +291,8 @@ check "Claude subscribes to the bus from its namespace" grep -q SUBSCRIBED <<<"$
 check "Hermes publishes under as/hermes" grep -q PUBLISHED <<<"$(zc as-hermes-net hermes "$(zpw HERMES)" pub as/hermes/test 'hello from hermes')"
 check "Claude on Qwen publishes under as/claude-qwen" \
   grep -q PUBLISHED <<<"$(zc as-claude-qwen-net claude-qwen "$(zpw CLAUDE_QWEN)" pub as/claude-qwen/test 'hello from qwen')"
+check "opencode publishes under as/opencode" \
+  grep -q PUBLISHED <<<"$(zc as-opencode-net opencode "$(zpw OPENCODE)" pub as/opencode/test 'hello from opencode')"
 zc as-hermes-net hermes "$(zpw HERMES)" pub as/claude/test 'spoofed by hermes' >/dev/null
 check "a wrong password is refused" grep -q REFUSED <<<"$(zc as-hermes-net hermes wrong pub as/hermes/test 'wrong password')"
 check "no login is refused (as-net-blind container without a sidecar)" grep -q REFUSED <<<"$(docker run --rm \
@@ -282,6 +303,7 @@ sleep 2
 zsub=$(docker logs asbt-zsub 2>&1)
 check "Claude receives Hermes' message" grep -q 'GOT as/hermes/test hello from hermes' <<<"$zsub"
 check "Claude receives the message of Claude on Qwen" grep -q 'GOT as/claude-qwen/test hello from qwen' <<<"$zsub"
+check "Claude receives opencode's message" grep -q 'GOT as/opencode/test hello from opencode' <<<"$zsub"
 check_not "the ACL drops Hermes' message under as/claude" grep -q spoofed <<<"$zsub"
 zlog=$(cat zenoh/logs/messages-*.jsonl 2>/dev/null || true)
 check "the message log on the host has Hermes' message" \

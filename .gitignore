@@ -19,6 +19,7 @@ ssl/squid-ca.*
 # Runtime state / caches
 claude-main/data/
 claude-qwen/data/
+opencode/data/
 claude-bridge/home/
 claude-bridge/workspace/
 hermes/data/
@@ -47,5 +48,6 @@ squid/conf/*
 !squid/conf/*.example
 hermes/config.yaml
 hermes/SOUL.md
+opencode/opencode.jsonc
 # your additions to as-dns (dns/Corefile imports them)
 dns/local.d/*.conf

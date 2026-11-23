@@ -1,6 +1,6 @@
 #!/bin/bash
 # Creates the real env files and the local configuration (squid/conf/*,
-# hermes/config.yaml, hermes/managed.env, hermes/SOUL.md) from the tracked *.example files when missing, and replaces every
+# hermes/config.yaml, hermes/managed.env, hermes/SOUL.md, opencode/opencode.jsonc) from the tracked *.example files when missing, and replaces every
 # generated CHANGE_ME_* placeholder with a random value. The same placeholder gets
 # the same value in every file (e.g. the PostgreSQL password in litellm-db.env and
 # DATABASE_URL). Existing values are never touched, so it is safe to run again.
@@ -25,7 +25,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 # local configuration: your copies; git pull only updates the *.example files
-for ex in squid/conf/*.example hermes/config.yaml.example hermes/managed.env.example hermes/SOUL.md.example; do
+for ex in squid/conf/*.example hermes/config.yaml.example hermes/managed.env.example hermes/SOUL.md.example opencode/opencode.jsonc.example; do
   f=${ex%.example}
   if [ ! -f "$f" ]; then
     cp "$ex" "$f"
@@ -38,7 +38,7 @@ for ex in squid/conf/*.example hermes/config.yaml.example hermes/managed.env.exa
   fi
 done
 
-FILES=(.env claude-main/claude.env claude-bridge/claude-bridge.env hermes/hermes.env litellm/litellm.env litellm/litellm-db.env open-webui/open-webui.env zenoh/zenoh.env claude-qwen/claude-qwen.env headroom/headroom.env)
+FILES=(.env claude-main/claude.env claude-bridge/claude-bridge.env hermes/hermes.env litellm/litellm.env litellm/litellm-db.env open-webui/open-webui.env zenoh/zenoh.env claude-qwen/claude-qwen.env headroom/headroom.env opencode/opencode.env)
 for f in "${FILES[@]}"; do
   if [ ! -f "$f" ]; then
     install -m 600 "$f.example" "$f"
@@ -54,12 +54,14 @@ declare -A GEN=(
   [CHANGE_ME_LITELLM_KEY_HERMES]="sk-$(hex 24)"
   [CHANGE_ME_LITELLM_KEY_OPEN_WEBUI]="sk-$(hex 24)"
   [CHANGE_ME_LITELLM_KEY_CLAUDE_QWEN]="sk-$(hex 24)"
+  [CHANGE_ME_LITELLM_KEY_OPENCODE]="sk-$(hex 24)"
   [CHANGE_ME_WEBUI_SECRET_KEY]="$(hex 32)"
   [CHANGE_ME_HERMES_DASHBOARD_USER]="admin"
   [CHANGE_ME_CLAUDE_OAI_KEY]="sk-$(hex 24)"
   [CHANGE_ME_ZENOH_PASSWORD_HERMES]="$(hex 24)"
   [CHANGE_ME_ZENOH_PASSWORD_CLAUDE]="$(hex 24)"
   [CHANGE_ME_ZENOH_PASSWORD_CLAUDE_QWEN]="$(hex 24)"
+  [CHANGE_ME_ZENOH_PASSWORD_OPENCODE]="$(hex 24)"
   [CHANGE_ME_HEADROOM_PROXY_TOKEN]="$(hex 32)"
 )
 

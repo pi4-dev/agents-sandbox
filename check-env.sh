@@ -10,7 +10,7 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-SERVICE_ENVS=(claude-main/claude claude-bridge/claude-bridge hermes/hermes litellm/litellm litellm/litellm-db open-webui/open-webui zenoh/zenoh claude-qwen/claude-qwen headroom/headroom)
+SERVICE_ENVS=(claude-main/claude claude-bridge/claude-bridge hermes/hermes litellm/litellm litellm/litellm-db open-webui/open-webui zenoh/zenoh claude-qwen/claude-qwen headroom/headroom opencode/opencode)
 
 if [ "${1:-}" = --examples ]; then mode=examples sfx=.example; else mode=local sfx=; fi
 fail=0
@@ -42,7 +42,7 @@ for f in "${envs[@]}"; do
 done
 
 # --- profiles: COMPOSE_PROFILES (shell over .env, as Compose reads it) ---
-KNOWN_PROFILES="claude qwen hermes bridge headroom webui debug"
+KNOWN_PROFILES="claude qwen hermes bridge headroom webui opencode debug"
 profiles=
 if [ $mode = local ] && [ -f .env ]; then
   if [ -n "${COMPOSE_PROFILES+set}" ]; then profiles=$COMPOSE_PROFILES; else profiles=$(get .env COMPOSE_PROFILES); fi
@@ -73,7 +73,7 @@ scan() { # scan <file> <allow CHANGE_ME_*: yes|no>
     if grep -qE '<[A-Za-z0-9_-]+>' <<<"$line"; then
       err "$file:$n: angle-bracket placeholder $where (use CHANGE_ME_<NAME>)"
     fi
-  done < <(grep -nvE '^[[:space:]]*(#|$)' "$file" || true)
+  done < <(grep -nvE '^[[:space:]]*(#|//|$)' "$file" || true)
 }
 allow=no
 [ $mode = examples ] && allow=yes
@@ -82,10 +82,13 @@ for f in "${present[@]}"; do scan "$f" $allow; done
 for f in proxy.env hermes/config.yaml"$sfx" hermes/managed.env"$sfx" litellm/litellm-config.yaml litellm/models/*.yaml squid/conf/*.txt"$sfx"; do
   [ -f "$f" ] && scan "$f" no
 done
+# opencode.jsonc: the model is yours to set (CHANGE_ME_OPENCODE_MODEL), needed with its profile
+if [ $mode = examples ]; then scan opencode/opencode.jsonc.example yes
+elif [ -f opencode/opencode.jsonc ] && active opencode; then scan opencode/opencode.jsonc no; fi
 
 # --- local configuration: your copies of the config *.example files ---
 if [ $mode = local ]; then
-  for ex in squid/conf/*.example hermes/config.yaml.example hermes/managed.env.example hermes/SOUL.md.example; do
+  for ex in squid/conf/*.example hermes/config.yaml.example hermes/managed.env.example hermes/SOUL.md.example opencode/opencode.jsonc.example; do
     f=${ex%.example}
     if [ ! -f "$f" ]; then err "missing $f (./gen-secrets.sh creates it from $ex)"
     elif [ "$ex" -nt "$f" ] && ! cmp -s "$ex" "$f"; then
@@ -149,7 +152,7 @@ if [ -f "$db" ] && [ -f "$ll" ]; then
   # client keys: registered by as-litellm-keys, so they must be valid LiteLLM virtual keys
   seen_all=" "
   for pair in "hermes/hermes.env$sfx LITELLM_API_KEY" "open-webui/open-webui.env$sfx OPENAI_API_KEY" \
-              "claude-qwen/claude-qwen.env$sfx ANTHROPIC_AUTH_TOKEN"; do
+              "claude-qwen/claude-qwen.env$sfx ANTHROPIC_AUTH_TOKEN" "opencode/opencode.env$sfx OPENCODE_LITELLM_KEY"; do
     read -r f k <<<"$pair"
     [ -f "$f" ] || continue
     v=$(get "$f" "$k")
@@ -250,7 +253,19 @@ if [ $mode = local ] && [ -f .env ]; then
     fi
   done
   hermes_model=$(sed -nE '/^model:/,/^[^[:space:]#]/s/^[[:space:]]+default:[[:space:]]*"?([^"#[:space:]]+)"?.*/\1/p' hermes/config.yaml 2>/dev/null | head -n1)
+  # opencode: its model (opencode/opencode.jsonc) must be one LiteLLM offers
+  oc_model=$(sed -nE 's#^[[:space:]]*"model":[[:space:]]*"litellm/([^"]+)".*#\1#p' opencode/opencode.jsonc 2>/dev/null | head -n1)
+  if active opencode && [ -f opencode/opencode.jsonc ]; then
+    if [ -z "$oc_model" ]; then
+      err "opencode/opencode.jsonc: no \"model\": \"litellm/<model_name>\" (the opencode profile needs it)"
+    elif [[ $oc_model != CHANGE_ME* ]] && ! printf '%s\n' "${names[@]}" | grep -qxF -- "$oc_model"; then
+      echo "check-env: warning: opencode's model $oc_model (opencode/opencode.jsonc) is not a model_name in litellm/models/*.yaml" >&2
+    fi
+  fi
   for m in "${off_models[@]}"; do
+    if active opencode && [ "${m%%:*}" = "$oc_model" ]; then
+      echo "check-env: warning: opencode's model ${m%%:*} comes from profile ${m#*:}, which is off; LiteLLM does not offer it" >&2
+    fi
     if active hermes && [ "${m%%:*}" = "$hermes_model" ]; then
       echo "check-env: warning: Hermes' model ${m%%:*} (hermes/config.yaml) comes from profile ${m#*:}, which is off; LiteLLM does not offer it. Add ${m#*:} to COMPOSE_PROFILES or pick another model" >&2
     fi
@@ -288,6 +303,7 @@ fi
 if [ $mode = local ]; then
   bridge_ws=$(get .env CLAUDE_BRIDGE_WORKSPACE) bridge_home=$(get .env CLAUDE_BRIDGE_HOME)
   for d in claude-main/data/workspace claude-main/data/claude-home claude-qwen/data/workspace claude-qwen/data/claude-home \
+           opencode/data/workspace opencode/data/home \
            "${bridge_ws:-./claude-bridge/workspace}" \
            "${bridge_home:-./claude-bridge/home}"; do
     d=${d#./}
@@ -329,7 +345,7 @@ fi
 ze=zenoh/zenoh.env$sfx
 if [ -f "$ze" ]; then
   for pair in "hermes/hermes.env$sfx ZENOH_PASSWORD_HERMES" "claude-main/claude.env$sfx ZENOH_PASSWORD_CLAUDE" \
-              "claude-qwen/claude-qwen.env$sfx ZENOH_PASSWORD_CLAUDE_QWEN"; do
+              "claude-qwen/claude-qwen.env$sfx ZENOH_PASSWORD_CLAUDE_QWEN" "opencode/opencode.env$sfx ZENOH_PASSWORD_OPENCODE"; do
     read -r f k <<<"$pair"
     if [ -f "$f" ] && [ "$(get "$f" "$k")" != "$(get "$ze" "$k")" ]; then
       err "$k differs between $f and $ze (the system logs in to as-zenoh with it)"
@@ -379,7 +395,7 @@ done
 
 # --- addresses live only in .env and squid/conf/lan.hosts; everything else uses names ---
 ipv4='([0-9]{1,3}\.){3}[0-9]{1,3}'
-for f in "${present[@]}" proxy.env docker-compose.yaml compose.hermes-privileged.yaml hermes/config.yaml* hermes/managed.env* zenoh/conf/* \
+for f in "${present[@]}" proxy.env docker-compose.yaml compose.hermes-privileged.yaml hermes/config.yaml* hermes/managed.env* opencode/opencode.jsonc* zenoh/conf/* \
          litellm/litellm-config.yaml litellm/models/*.yaml dns/Corefile ingress/Caddyfile ingress/dashboard.html squid/conf/* \
          claude-main/policy/*; do
   [ -f "$f" ] || continue

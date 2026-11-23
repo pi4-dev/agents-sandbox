@@ -11,6 +11,7 @@ Docker Compose homelab for AI coding agents with a shared LiteLLM API, an HTTPS-
 | `as-claude-main`, `as-claude-net` | `claude` | Claude Code agent and its network-namespace firewall |
 | `as-claude-bridge`, `as-claude-bridge-net` | `bridge` | OpenAI-compatible bridge (Claude Agent SDK, subscription login) for LiteLLM's `claude-sub` model, independent of the agent: own image with the code read-only, env, directories and firewall (`:9090` from LiteLLM only) ([details](docs/CLAUDE_BRIDGE.md)) |
 | `as-claude-qwen`, `as-claude-qwen-net` | `qwen` | Claude Code on a LiteLLM model (`CLAUDE_QWEN_MODEL`), like Hermes: LiteLLM through `as-llm-gw` with its own key, on the message bus |
+| `as-opencode`, `as-opencode-net` | `opencode` | [opencode](https://opencode.ai) (V2) on a LiteLLM model, like Claude on Qwen: LiteLLM through `as-llm-gw` with its own key, its configuration read-only in opencode's managed scope, on the message bus ([details](#opencode-as-opencode)) |
 | `as-hermes`, `as-hermes-net` | `hermes` | Hermes Agent and its network-namespace firewall |
 | `as-netshoot`, `as-netshoot-net` | `debug` | Network diagnostics: reaches everything in `as-net-blind` on any port and by ping, the sidecar-protected containers included (they admit it with `ALLOW_IN any::netshoot.as.internal`); nothing can connect to it |
 | `as-squid` | core | Central HTTPS proxy and TLS inspection; the only way out of `as-net-blind` |
@@ -34,12 +35,14 @@ proxy.env                      Agent proxy variables (by name)
 run-first.sh                   Generate missing secrets, create directories, check env files, start the profiles
 start-claude-main.sh           Claude Code session in the Claude agent (as-claude-main, Remote Control)
 start-claude-qwen.sh           Claude Code session in Claude on Qwen (as-claude-qwen)
+start-opencode.sh              opencode session (as-opencode)
 gen-secrets.sh                 Create env files from the examples, fill generated CHANGE_ME_* values
 check-env.sh                   Placeholders, values that must match, no IPs outside .env
 dns/                           CoreDNS config (Corefile), your additions (local.d/*.conf, git-ignored), image (Dockerfile, run.sh), query log (logs/)
 ingress/                       as-ingress config (Caddyfile), its dashboard template, access log (logs/)
 claude-main/                   Claude agent image, policy and environment example
 claude-qwen/                   Claude Code on a LiteLLM model: environment example, CLAUDE.md (data/: runtime)
+opencode/                      opencode: image, managed configuration (opencode.jsonc.example), AGENTS.md, environment example (data/: runtime)
 claude-bridge/                 Claude bridge: server.mjs, its image and environment example (home/, workspace/: runtime)
 hermes/                        Hermes configuration (config.yaml.example), managed settings (managed.env.example), persona (SOUL.md.example), environment example
 fw/                            Network namespace firewall rules (fw.sh)
@@ -135,7 +138,8 @@ In short:
 6. Validate: `tests/compose/validate.sh`, then `docker compose config -q` with your real files.
 7. Choose what runs: `COMPOSE_PROFILES` in `.env` ([Profiles](#profiles); the example runs
    everything but `debug`). With `qwen`, also set `CLAUDE_QWEN_MODEL` and
-   `CLAUDE_QWEN_CONTEXT_TOKENS`.
+   `CLAUDE_QWEN_CONTEXT_TOKENS`; with `opencode`, the model in `opencode/opencode.jsonc`
+   ([opencode](#opencode-as-opencode)).
 8. Start: `./run-first.sh` (or `./check-env.sh && docker compose up -d`), then the agent
    sessions: `./start-claude-main.sh` (Claude agent), `./start-claude-qwen.sh` (Claude on Qwen).
 9. If you use the Claude bridge, set it up in its own directories and give it its own login ([CLAUDE_BRIDGE.md](docs/CLAUDE_BRIDGE.md), "Setting up the bridge").
@@ -150,13 +154,14 @@ chosen by `COMPOSE_PROFILES` in `.env` (comma-separated, `*` = all):
 | --- | --- | --- |
 | `claude` | `as-claude-main` (Claude agent) | |
 | `qwen` | `as-claude-qwen` (Claude on Qwen); needs `CLAUDE_QWEN_MODEL`, `CLAUDE_QWEN_CONTEXT_TOKENS` | its LiteLLM key is not registered |
+| `opencode` | `as-opencode`; needs the model in `opencode/opencode.jsonc` | its LiteLLM key is not registered |
 | `hermes` | `as-hermes` | its LiteLLM key is not registered |
 | `bridge` | `as-claude-bridge` | LiteLLM does not offer `claude-sub` (`litellm/models/claude-local.yaml` has `# @profile bridge`) |
 | `headroom` | `as-headroom` | `as-llm-gw` sends chat and messages to LiteLLM directly, uncompressed |
 | `webui` | `as-open-webui` | its LiteLLM key is not registered; ingress `:8080` answers 502 |
 | `debug` | `as-netshoot` (reaches everything in `as-net-blind`) | off in `.env.example`: only on request |
 
-`as-zenoh` runs with `claude`, `qwen` or `hermes`; each agent's firewall sidecar has the
+`as-zenoh` runs with `claude`, `qwen`, `hermes` or `opencode`; each agent's firewall sidecar has the
 agent's profile.
 
 - **Set profiles in `.env`, not with `--profile`.** Compose passes `COMPOSE_PROFILES` to the
@@ -302,14 +307,51 @@ Claude Code on a model of LiteLLM, the way Hermes reaches its model:
   through the Responses API, which an upstream rebuilds on its own (vLLM Qwen then failed
   with `System message must be at the beginning.`). Test: `tests/litellm/run-messages-tests.sh`.
 
+### opencode (`as-opencode`)
+
+[opencode](https://opencode.ai) V2 (`@opencode/cli`, `OPENCODE_VERSION` in `.env`, default
+`2.3.2`, baked into `agents-sandbox/opencode`), profile `opencode`, set up like Claude on Qwen:
+
+- **Model:** LiteLLM through `as-llm-gw` (`/v1/chat/completions`, through `as-headroom` with
+  its profile), its own LiteLLM key (alias `opencode`, `OPENCODE_LITELLM_KEY` in
+  `opencode/opencode.env`, generated by `gen-secrets.sh`). Choose the model in your
+  `opencode/opencode.jsonc`: `CHANGE_ME_OPENCODE_MODEL` (three places) becomes a `model_name`
+  from `litellm/models/*.yaml`, `limit` its real context window and output limit; then
+  `docker compose up -d --force-recreate as-opencode`. `check-env.sh` fails on the
+  placeholder and warns about a model LiteLLM does not offer.
+- **Configuration the agent cannot change:** `opencode/opencode.jsonc` is mounted read-only
+  as `/etc/opencode/opencode.jsonc`, opencode's managed scope, which user and project
+  configuration cannot override. Its policies allow no provider but `litellm` (opencode's
+  own cloud models are refused, `opencode run -m opencode/...` gives "Model unavailable")
+  and no web search; permissions allow everything (the container is the boundary); no
+  self-update, no session sharing, no LSP or formatter downloads.
+  - Not `integration.*` policies: in 2.3.2 a deny on every integration also removes the
+    `litellm` provider ("No model is available").
+- **Network:** besides LiteLLM and the bus only through Squid. The only host opencode 2.3.2
+  contacted on its own in a test (isolated network, a proxy that logged and refused
+  everything) was its model catalog, `models.opencode.ai` (`/experimental/v2.0/api.json`,
+  retried often). It is on the allowlist read-only, that file only (`path_domains.txt`,
+  `allowed_urls.txt`); `opencode.ai` itself (updates, sharing) is not.
+  `OPENCODE_DISABLE_FREE_MODELS=1` and `OPENCODE_DISABLE_AUTOUPDATE=1` (both in the env
+  file; found in the binary, not in the docs) hide the cloud models and stop the updater.
+- **Sessions:** `./start-opencode.sh` runs `opencode --standalone` (a private server for the
+  session instead of a shared background service); arguments replace that, e.g.
+  `./start-opencode.sh run "…"`. Sessions, database and logs: `opencode/data/home`
+  (`~/.local/share/opencode`). Its instructions: `opencode/AGENTS.md`, read-only at
+  `~/.config/opencode/AGENTS.md`.
+- **Not exposed:** no `opencode serve` or web UI through `as-ingress`; its server
+  authentication is not documented.
+- **Your copies after a pull:** an `allowed_urls.txt`/`path_domains.txt` from before
+  lacks the catalog lines; `check-env.sh` points at the changed `.example` files.
+
 ### Message bus (Zenoh)
 
 `as-zenoh` runs the Zenoh router (`eclipse/zenoh`, `ZENOH_VERSION`, default `1.10.2`) at
-`zenoh.as.internal:7447`, on `as-net-blind` only. Hermes, the Claude agent and Claude on
-Qwen are on it (`ALLOW_OUT` of their sidecars); the Claude bridge is not.
+`zenoh.as.internal:7447`, on `as-net-blind` only. Hermes, the Claude agent, Claude on
+Qwen and opencode are on it (`ALLOW_OUT` of their sidecars); the Claude bridge is not.
 
 - **Logins and ACL** (`zenoh/conf/zenoh.json5`): every system logs in with its own user
-  (`hermes`, `claude`, `claude-qwen`; `_` in `ZENOH_PASSWORD_<NAME>` becomes `-`) and password (`ZENOH_PASSWORD_<NAME>` in `zenoh/zenoh.env` and in the
+  (`hermes`, `claude`, `claude-qwen`, `opencode`; `_` in `ZENOH_PASSWORD_<NAME>` becomes `-`) and password (`ZENOH_PASSWORD_<NAME>` in `zenoh/zenoh.env` and in the
   system's env file, generated by `gen-secrets.sh`; `check-env.sh` compares them). A
   system may publish, answer queries and hold liveliness tokens only under
   `as/<name>/**`, and read all of `as/**`; everything else is denied. A wrong password,
@@ -350,7 +392,7 @@ Qwen are on it (`ALLOW_OUT` of their sidecars); the Claude bridge is not.
 
 ### Day-to-day
 
-- **Local configuration is yours.** Git tracks only `squid/conf/*.example`, `hermes/config.yaml.example`, `hermes/managed.env.example` and `hermes/SOUL.md.example`; `./gen-secrets.sh` creates `squid/conf/squid.conf`, the lists, `lan.hosts`, `hermes/config.yaml`, `hermes/managed.env` and `hermes/SOUL.md` from them, and `git pull` never touches your copies. as-dns additions go into `dns/local.d/*.conf`, which the tracked `dns/Corefile` imports ([dns/local.d/README.md](dns/local.d/README.md); no `forward` out of `as-net-blind`).
+- **Local configuration is yours.** Git tracks only `squid/conf/*.example`, `hermes/config.yaml.example`, `hermes/managed.env.example`, `hermes/SOUL.md.example` and `opencode/opencode.jsonc.example`; `./gen-secrets.sh` creates `squid/conf/squid.conf`, the lists, `lan.hosts`, `hermes/config.yaml`, `hermes/managed.env`, `hermes/SOUL.md` and `opencode/opencode.jsonc` from them, and `git pull` never touches your copies. as-dns additions go into `dns/local.d/*.conf`, which the tracked `dns/Corefile` imports ([dns/local.d/README.md](dns/local.d/README.md); no `forward` out of `as-net-blind`).
   - Edit your copies, then run `squid/reload_squid.sh` (validates and reloads without restarting the container).
   - When a pull changes an `.example`, `check-env.sh` and `gen-secrets.sh` warn and print the `diff -u` to review. Take over what you want, then `touch` your copy to mark it reviewed.
   - `squid.conf` carries the policy (SSL bump, GitHub and npm write rules): review its changes in particular.

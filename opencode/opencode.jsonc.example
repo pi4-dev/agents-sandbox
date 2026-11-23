@@ -1,0 +1,52 @@
+// opencode (as-opencode): system configuration. ./gen-secrets.sh copies this file to
+// opencode/opencode.jsonc (yours, git-ignored); Compose mounts that copy read-only at
+// /etc/opencode/opencode.jsonc, opencode's managed scope: user and project configuration
+// cannot override it (README, "opencode").
+//
+// Set the model: CHANGE_ME_OPENCODE_MODEL (three places) becomes a model_name from
+// litellm/models/*.yaml, and limit holds that model's real context window and output
+// limit (opencode cannot detect them). Then: docker compose up -d --force-recreate as-opencode
+{
+  "$schema": "https://opencode.ai/config.json",
+
+  // the only provider: LiteLLM through as-llm-gw (client routes, chat through as-headroom
+  // when its profile is on), with opencode's own LiteLLM key (alias "opencode")
+  "providers": {
+    "litellm": {
+      "name": "LiteLLM",
+      "env": ["OPENCODE_LITELLM_KEY"],
+      "package": "@opencode/ai/providers/openai-compatible",
+      "settings": {
+        "baseURL": "http://llm.as.internal:4000/v1",
+        "apiKey": "{env:OPENCODE_LITELLM_KEY}"
+      },
+      "models": {
+        "CHANGE_ME_OPENCODE_MODEL": {
+          "name": "CHANGE_ME_OPENCODE_MODEL",
+          "limit": { "context": 131072, "output": 16384 }
+        }
+      }
+    }
+  },
+  "model": "litellm/CHANGE_ME_OPENCODE_MODEL",
+
+  // enforced here, in the managed scope: no provider but litellm (also not opencode's own
+  // cloud models, opencode/*), no web search. Not "integration.*": in opencode 2.3.2 a deny
+  // on every integration also removes the litellm provider (no model is available).
+  "policies": [
+    { "action": "provider.use", "resource": "*", "effect": "deny" },
+    { "action": "provider.use", "resource": "litellm", "effect": "allow" },
+    { "action": "websearch.use", "resource": "*", "effect": "deny" }
+  ],
+
+  // the container is the boundary (like the Claude agents with --dangerously-skip-permissions)
+  "permissions": [{ "action": "*", "resource": "*", "effect": "allow" }],
+
+  // nothing of its own on the network: no update, no session sharing (it would upload the
+  // conversation), no language-server or formatter downloads. Squid blocks these hosts
+  // anyway. The model catalog (models.opencode.ai/.../api.json) is on the allowlist, read-only.
+  "update": "disable",
+  "share": "disabled",
+  "lsp": false,
+  "formatter": false
+}

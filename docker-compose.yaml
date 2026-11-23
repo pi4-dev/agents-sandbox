@@ -7,7 +7,8 @@ name: agents-sandbox
 # (as-squid, as-dns, as-ingress, as-litellm, its database and keys job, as-llm-gw).
 #   claude   as-claude-main        qwen     as-claude-qwen       hermes  as-hermes
 #   bridge   as-claude-bridge      headroom as-headroom          webui   as-open-webui
-#   debug    as-netshoot           (as-zenoh runs with claude, qwen or hermes)
+#   debug    as-netshoot           opencode as-opencode
+#   (as-zenoh runs with claude, qwen, hermes or opencode)
 # Each agent's firewall sidecar has the agent's profile. Set profiles in .env, not with
 # --profile: as-litellm, as-litellm-keys and as-llm-gw read them from COMPOSE_PROFILES.
 
@@ -286,11 +287,12 @@ services:
       - hermes/hermes.env
       - open-webui/open-webui.env
       - claude-qwen/claude-qwen.env
+      - opencode/opencode.env
     environment:
       LITELLM_URL: http://as-litellm:4000
       # alias in LiteLLM = env variable holding the key
       # alias=VARIABLE@profile: registered only while that profile is active
-      LITELLM_CLIENT_KEYS: "hermes=LITELLM_API_KEY@hermes open-webui=OPENAI_API_KEY@webui claude-qwen=ANTHROPIC_AUTH_TOKEN@qwen"
+      LITELLM_CLIENT_KEYS: "hermes=LITELLM_API_KEY@hermes open-webui=OPENAI_API_KEY@webui claude-qwen=ANTHROPIC_AUTH_TOKEN@qwen opencode=OPENCODE_LITELLM_KEY@opencode"
       AS_PROFILES: *as-profiles
     volumes:
       - ./litellm/litellm-keys.py:/scripts/litellm-keys.py:ro
@@ -409,7 +411,7 @@ services:
   as-zenoh:
     image: eclipse/zenoh:${ZENOH_VERSION:-1.10.2}
     container_name: as-zenoh
-    profiles: [claude, qwen, hermes]
+    profiles: [claude, qwen, hermes, opencode]
     restart: unless-stopped
     entrypoint: ["/bin/sh", "/etc/zenoh/run.sh"]
     env_file:
@@ -684,6 +686,72 @@ services:
       - ./claude-qwen/data/claude-home:/home/node        # settings and sessions survive restarts
       - ./claude-main/policy:/etc/claude-code:ro         # the same managed settings as the Claude agent
       - ./claude-qwen/CLAUDE.md:/home/node/.claude/CLAUDE.md:ro
+    stdin_open: true
+    tty: true
+    restart: unless-stopped
+    command: ["sh", "-c", "trap 'exit 0' TERM INT; sleep infinity & wait"]
+
+# - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+  # opencode (V2) on a model of LiteLLM, like Claude on Qwen: LiteLLM only through
+  # as-llm-gw with its own key (alias opencode), the web through Squid, on the bus
+  as-opencode-net:
+    <<: *fw-sidecar
+    container_name: as-opencode-net
+    profiles: [opencode]
+    hostname: opencode
+    environment:
+      <<: *fw-env
+      ALLOW_IN: >-
+        any::netshoot.as.internal
+      ALLOW_OUT: >-
+        tcp:llm.as.internal:4000
+        tcp:zenoh.as.internal:7447
+      FW_LOG: 1
+    volumes:
+      - ./fw/fw.sh:/fw.sh:ro
+    networks:
+      as-net-blind:
+        aliases: [opencode.as.internal]
+
+  as-opencode:
+    <<: *agent-hardening
+    build:
+      context: ./opencode
+      additional_contexts:
+        ssl: ./ssl
+      args:
+        OPENCODE_VERSION: ${OPENCODE_VERSION:-2.3.2}
+        ZENOH_VERSION: ${ZENOH_VERSION:-1.10.2}
+    # the proxy CA is baked in: build on every `up` (cached, quick) so a new CA reaches it
+    image: agents-sandbox/opencode
+    pull_policy: build
+    container_name: as-opencode
+    profiles: [opencode]
+    network_mode: service:as-opencode-net
+    depends_on:
+      as-opencode-net: { condition: service_healthy }
+      as-llm-gw: { condition: service_started }
+      as-litellm-keys: { condition: service_completed_successfully }
+    env_file:
+      - proxy.env
+      - opencode/opencode.env                # OPENCODE_LITELLM_KEY: its LiteLLM key
+    environment:
+      # message bus (as-zenoh); the password is ZENOH_PASSWORD_OPENCODE in its env file
+      ZENOH_CONNECT: tcp/zenoh.as.internal:7447
+      ZENOH_USER: opencode
+    volumes:
+      - ./opencode/data/workspace:/workspace
+      - ./opencode/data/home:/home/node                  # sessions, database, logs survive restarts
+      # managed scope (opencode/opencode.jsonc.example): model, policies, no update or
+      # sharing; user and project configuration cannot override it
+      - type: bind
+        source: ./opencode/opencode.jsonc
+        target: /etc/opencode/opencode.jsonc
+        read_only: true
+        bind:
+          create_host_path: false
+      - ./opencode/AGENTS.md:/home/node/.config/opencode/AGENTS.md:ro
     stdin_open: true
     tty: true
     restart: unless-stopped

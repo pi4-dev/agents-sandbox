@@ -18,6 +18,9 @@
 
 ^https://raw\.githubusercontent\.com/BerriAI/litellm/main/model_prices_and_context_window\.json
 
+# opencode's model catalog (as-opencode), read-only (squid.conf): the catalog file only
+^https://models\.opencode\.ai/[^?]*/api\.json(\?|$)
+
 # debian
 ^http://ftp\.pl\.debian\.org/debian
 ^https://ftp\.pl\.debian\.org/debian

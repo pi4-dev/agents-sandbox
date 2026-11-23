@@ -47,6 +47,13 @@
         key_exprs: ["as/claude-qwen/**"],
       },
       {
+        id: "own-opencode",
+        messages: ["put", "delete", "declare_queryable", "reply", "liveliness_token"],
+        flows: ["ingress"],
+        permission: "allow",
+        key_exprs: ["as/opencode/**"],
+      },
+      {
         // subscribe to, query and watch the whole bus
         id: "bus-read",
         messages: ["declare_subscriber", "query", "declare_liveliness_subscriber", "liveliness_query"],
@@ -68,11 +75,13 @@
       { id: "hermes", usernames: ["hermes"] },
       { id: "claude", usernames: ["claude"] },
       { id: "claude-qwen", usernames: ["claude-qwen"] },
+      { id: "opencode", usernames: ["opencode"] },
     ],
     policies: [
       { rules: ["own-hermes", "bus-read", "bus-deliver"], subjects: ["hermes"] },
       { rules: ["own-claude", "bus-read", "bus-deliver"], subjects: ["claude"] },
       { rules: ["own-claude-qwen", "bus-read", "bus-deliver"], subjects: ["claude-qwen"] },
+      { rules: ["own-opencode", "bus-read", "bus-deliver"], subjects: ["opencode"] },
     ],
   },
 }
