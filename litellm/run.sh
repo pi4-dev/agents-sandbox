@@ -18,6 +18,19 @@ PROFILES=$(printf '%s' "${AS_PROFILES-,*,}" | tr -d ' ')   # Compose allows "a, 
 active() { case $PROFILES in *",$1,"* | *",*,"*) return 0 ;; esac; return 1; }
 
 [ -f "$BASE" ] || { echo "as-litellm: $BASE is missing" >&2; exit 1; }
+# The entrypoint of the LiteLLM images up to v1.110.x. v1.111.0 has none: it runs as uid
+# 65532 (which cannot read the bind mounts here) with /app/docker-entrypoint.sh; pin
+# LITELLM_IMAGE (docker-compose.yaml) rather than run it half-configured.
+ENTRYPOINT=${LITELLM_ENTRYPOINT:-/app/docker/prod_entrypoint.sh}
+[ -f "$ENTRYPOINT" ] || {
+  echo "as-litellm: $ENTRYPOINT is not in this image (LiteLLM v1.111.0 or later?);" \
+    "set LITELLM_IMAGE to a v1.110.x image (the default in docker-compose.yaml)" >&2
+  exit 1
+}
+[ -r "$MODELS" ] && [ -x "$MODELS" ] || {
+  echo "as-litellm: cannot read $MODELS as $(id -u):$(id -g) (litellm/models permissions)" >&2
+  exit 1
+}
 {
   n=0
   for f in "$MODELS"/*.yaml; do
@@ -37,4 +50,4 @@ active() { case $PROFILES in *",$1,"* | *",*,"*) return 0 ;; esac; return 1; }
   awk '/^include:/ { skip = 1; next } skip && /^[^[:space:]#]/ { skip = 0 } !skip' "$BASE"
 } >"$OUT"
 echo "as-litellm: models from $(grep -c '^  - ' "$OUT" || true) file(s) in $MODELS" >&2
-exec /app/docker/prod_entrypoint.sh --config "$OUT" "$@"
+exec "$ENTRYPOINT" --config "$OUT" "$@"

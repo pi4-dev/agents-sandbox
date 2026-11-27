@@ -220,7 +220,7 @@ services:
 # -----------------------------------------------------
 
   as-litellm:
-    image: ${LITELLM_IMAGE:-ghcr.io/berriai/litellm:main-stable}
+    image: ${LITELLM_IMAGE:-ghcr.io/berriai/litellm:v1.110.4}
     container_name: as-litellm
     restart: unless-stopped
     #ports:
@@ -279,7 +279,7 @@ services:
   # stack comes up in one `docker compose up`. Idempotent; a changed value rotates
   # the key and keeps its settings (models, budgets set in the LiteLLM UI).
   as-litellm-keys:
-    image: ${LITELLM_IMAGE:-ghcr.io/berriai/litellm:main-stable}
+    image: ${LITELLM_IMAGE:-ghcr.io/berriai/litellm:v1.110.4}
     container_name: as-litellm-keys
     entrypoint: ["python3", "/scripts/litellm-keys.py"]
     env_file:
