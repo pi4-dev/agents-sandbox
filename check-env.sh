@@ -205,6 +205,12 @@ cfg=litellm/litellm-config.yaml
 names=() vars=()
 for f in litellm/models/*.yaml; do
   [ -f "$f" ] || continue
+  # --examples checks the repo (CI): a local, untracked model set is checked against
+  # litellm/litellm.env by a plain ./check-env.sh, not against the example
+  if [ $mode = examples ] && git rev-parse --is-inside-work-tree >/dev/null 2>&1 &&
+    ! git ls-files --error-unmatch -- "$f" >/dev/null 2>&1; then
+    continue
+  fi
   while read -r n; do names+=("$n"); done < <(sed -nE 's/^[[:space:]]*-[[:space:]]*model_name:[[:space:]]*"?([^"#[:space:]]+)"?.*/\1/p' "$f")
   while read -r v; do vars+=("$v|$f"); done < <(grep -vE '^[[:space:]]*#' "$f" | grep -oE 'os\.environ/[A-Za-z0-9_]+' | sed 's#os.environ/##' | sort -u)
 done
