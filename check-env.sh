@@ -252,9 +252,9 @@ if [ $mode = local ] && [ -f .env ]; then
       while read -r n; do off_models+=("$n:$p"); done < <(sed -nE 's/^[[:space:]]*-[[:space:]]*model_name:[[:space:]]*"?([^"#[:space:]]+)"?.*/\1/p' "$f")
     fi
   done
-  hermes_model=$(sed -nE '/^model:/,/^[^[:space:]#]/s/^[[:space:]]+default:[[:space:]]*"?([^"#[:space:]]+)"?.*/\1/p' hermes/config.yaml 2>/dev/null | head -n1)
+  hermes_model=$(sed -nE '/^model:/,/^[^[:space:]#]/s/^[[:space:]]+default:[[:space:]]*"?([^"#[:space:]]+)"?.*/\1/p' hermes/config.yaml 2>/dev/null | head -n1 || true)
   # opencode: its model (opencode/opencode.jsonc) must be one LiteLLM offers
-  oc_model=$(sed -nE 's#^[[:space:]]*"model":[[:space:]]*"litellm/([^"]+)".*#\1#p' opencode/opencode.jsonc 2>/dev/null | head -n1)
+  oc_model=$(sed -nE 's#^[[:space:]]*"model":[[:space:]]*"litellm/([^"]+)".*#\1#p' opencode/opencode.jsonc 2>/dev/null | head -n1 || true)
   if active opencode && [ -f opencode/opencode.jsonc ]; then
     if [ -z "$oc_model" ]; then
       err "opencode/opencode.jsonc: no \"model\": \"litellm/<model_name>\" (the opencode profile needs it)"
@@ -284,6 +284,22 @@ if [ $mode = local ] && [ -f .env ]; then
   # the value .env.example carried until it became empty
   if [ "$(get .env SQUID_LOCALNET_EXTRA)" = 192.168.100.0/24 ]; then
     echo "check-env: warning: SQUID_LOCALNET_EXTRA=192.168.100.0/24 in .env is the old example value: that network may use the proxy. Leave it empty unless it really does (docs/NETWORK.md, flow matrix)" >&2
+  fi
+fi
+
+# --- LiteLLM image: litellm/run.sh needs the layout up to v1.110.x (root, docker/prod_entrypoint.sh);
+#     v1.111.0 runs as UID 65532 with another entrypoint and does not start here ---
+if [ $mode = local ] && [ -f .env ]; then
+  if [ -n "${LITELLM_IMAGE+set}" ]; then limg=$LITELLM_IMAGE; else limg=$(get .env LITELLM_IMAGE); fi
+  if [ -n "$limg" ] && [[ $limg != *@sha256:* ]]; then
+    ltag=${limg##*/}; ltag=${ltag#*:}; [ "$ltag" = "${limg##*/}" ] && ltag=latest
+    if [[ $ltag =~ ^(main-)?v?([0-9]+)\.([0-9]+)\. ]]; then
+      if [ "${BASH_REMATCH[2]}" -gt 1 ] || [ "${BASH_REMATCH[3]}" -ge 111 ]; then
+        err "LITELLM_IMAGE=$limg: LiteLLM v1.111+ runs as UID 65532 with a new entrypoint, which litellm/run.sh does not support; use v1.110.x or remove LITELLM_IMAGE from .env (the default is pinned)"
+      fi
+    else
+      echo "check-env: warning: LITELLM_IMAGE=$limg is a floating tag (now LiteLLM v1.111+, which does not start here); pin a v1.110.x version or remove it from .env" >&2
+    fi
   fi
 fi
 
