@@ -51,3 +51,9 @@ hermes/SOUL.md
 opencode/opencode.jsonc
 # your additions to as-dns (dns/Corefile imports them)
 dns/local.d/*.conf
+
+# Local LiteLLM model sets (your own endpoints); only the shipped ones are tracked
+litellm/models/*
+!litellm/models/README.md
+!litellm/models/claude-local.yaml
+!litellm/models/openrouter.yaml

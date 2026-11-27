@@ -26,9 +26,12 @@ across files.
    ```
 2. **Nothing to include.** Every `*.yaml` here is loaded; to park a file, rename it
    (e.g. `<name>.yaml.off`).
-3. **Secrets.** Add `MYAPI_API_KEY=CHANGE_ME_MYAPI_API_KEY` (and `MYAPI_API_BASE=…`
-   if used) to `litellm/litellm.env.example`, and the real values to
-   `litellm/litellm.env`. `check-env.sh` refuses to start while a placeholder is left.
+3. **Secrets.** Put the real values (`MYAPI_API_KEY=…`, `MYAPI_API_BASE=…`) in
+   `litellm/litellm.env`; `check-env.sh` checks that every `os.environ/…` of the file
+   is set there. Your own model files are local: `.gitignore` keeps them out of the
+   repo, and `make test` (`check-env.sh --examples`) skips them. Only a set shipped
+   with the repo also needs `MYAPI_API_KEY=CHANGE_ME_MYAPI_API_KEY` in
+   `litellm/litellm.env.example`.
 4. **Network.** Pick one:
    - **internet endpoint:** add its API host to `squid/conf/llm_api_domains.txt`
      (reachable through Squid from LiteLLM only), then `squid/reload_squid.sh`;
