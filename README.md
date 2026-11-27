@@ -32,10 +32,7 @@ docker-compose.yaml            Compose topology and network definitions
 compose.hermes-privileged.yaml Opt-in full-trust (privileged) mode for Hermes
 .env.example                   All addressing and optional overrides (copy to .env)
 proxy.env                      Agent proxy variables (by name)
-run-first.sh                   Generate missing secrets, create directories, check env files, start the profiles
-start-claude-main.sh           Claude Code session in the Claude agent (as-claude-main, Remote Control)
-start-claude-qwen.sh           Claude Code session in Claude on Qwen (as-claude-qwen)
-start-opencode.sh              opencode session (as-opencode)
+Makefile                       Shortcuts (`make` lists them): setup, check, up/down, logs, agent sessions, tests
 gen-secrets.sh                 Create env files from the examples, fill generated CHANGE_ME_* values
 check-env.sh                   Placeholders, values that must match, no IPs outside .env
 dns/                           CoreDNS config (Corefile), your additions (local.d/*.conf, git-ignored), image (Dockerfile, run.sh), query log (logs/)
@@ -121,17 +118,17 @@ In short:
    `<...>`), a key from `.env.example` missing in `.env`, a `DATABASE_URL`
    that does not match `litellm-db.env`, the LiteLLM master key reused as a client
    key, client keys LiteLLM would reject (`sk-` prefix, 16+ characters) or shared between
-   clients, and literal IP addresses outside `.env`/`squid/conf/lan.hosts`. `run-first.sh`
-   runs it; run it yourself before a plain `docker compose up`.
+   clients, and literal IP addresses outside `.env`/`squid/conf/lan.hosts`. `make up`
+   runs it (`make check` alone); run it yourself before a plain `docker compose up`.
 3. Adapt addressing and the macvlan parent in `.env`; add LAN hosts LiteLLM talks to
    (e.g. a local LLM server) to `squid/conf/lan.hosts` as `<name>.lan.internal`.
 4. The Claude containers run as `node` (UID 1000) and must own their directories
    (`claude-main/data/`, `claude-bridge/`), or the Claude login cannot be saved.
-   `run-first.sh` creates them; `check-env.sh` warns about a missing directory or a
+   `make setup` creates them; `check-env.sh` warns about a missing directory or a
    file not owned by UID 1000 and prints the `sudo chown -R 1000:1000 …` to run.
    Hermes runs as `PUID`/`PGID` from `hermes/hermes.env` (default 1000) and must own
    `hermes/data` and `hermes/workspace` the same way, or it cannot write `/workspace`;
-   `run-first.sh` creates them and `check-env.sh` checks them against `PUID`. It must
+   `make setup` creates them and `check-env.sh` checks them against `PUID`. It must
    also read `hermes/managed.env`, or Hermes does not start; `check-env.sh` warns.
 5. Create the proxy CA: `ssl/init_ca.sh` (needs `sudo` to hand the key to UID 13).
    `check-env.sh` fails without it ([Proxy CA](#proxy-ca)).
@@ -140,8 +137,12 @@ In short:
    everything but `debug`). With `qwen`, also set `CLAUDE_QWEN_MODEL` and
    `CLAUDE_QWEN_CONTEXT_TOKENS`; with `opencode`, the model in `opencode/opencode.jsonc`
    ([opencode](#opencode-as-opencode)).
-8. Start: `./run-first.sh` (or `./check-env.sh && docker compose up -d`), then the agent
-   sessions: `./start-claude-main.sh` (Claude agent), `./start-claude-qwen.sh` (Claude on Qwen).
+8. Start: `make up` (secrets, directories, `check-env.sh`, `docker compose up -d`, Squid
+   reload; all state is kept), then the agent sessions: `make claude` (Claude agent),
+   `make qwen` (Claude on Qwen), `make opencode`. `ARGS="..."` replaces a session's default
+   arguments, e.g. `make claude ARGS=--resume`. Headless:
+   `docker compose exec -T as-claude-main sh -c 'cd /workspace/repo-a && claude -p "Review the changes from the last 24h" --output-format json' > review.json`.
+   `make` lists every target (`down`, `ps`, `logs S=…`, `restart S=…`, `shell S=…`, `test`).
 9. If you use the Claude bridge, set it up in its own directories and give it its own login ([CLAUDE_BRIDGE.md](docs/CLAUDE_BRIDGE.md), "Setting up the bridge").
 
 ### Profiles
@@ -235,7 +236,7 @@ Hermes, Claude on Qwen -> as-llm-gw -> as-headroom:8787 -> as-litellm:4000
   not LiteLLM can use that list, and Headroom cannot use the agents' or LiteLLM's lists
   through that leg. Downloaded once into `headroom/data/hf`. Without them Headroom falls
   back to rule-based compression.
-- **State:** `headroom/data` (owner `LOGS_UID`, `run-first.sh` creates it): workspace and
+- **State:** `headroom/data` (owner `LOGS_UID`, `make setup` creates it): workspace and
   model cache. The container is read-only, without capabilities, not root.
 - **Savings:** `docker compose logs as-headroom | grep PERF` (tokens before/after per request).
   In tests Headroom 0.42.0 compressed a repetitive tool output on the chat path by about
@@ -299,7 +300,7 @@ Claude Code on a model of LiteLLM, the way Hermes reaches its model:
   the wrong point.
 - Own workspace and home (`claude-qwen/data/`), the Claude agent's managed settings
   (`claude-main/policy`), its own `claude-qwen/CLAUDE.md`; on the bus as `claude-qwen`.
-- Start a session: `./start-claude-qwen.sh` (`docker compose exec as-claude-qwen claude`).
+- Start a session: `make qwen` (`docker compose exec as-claude-qwen claude`).
 - **Effort:** `CLAUDE_CODE_EFFORT_LEVEL=medium` in `docker-compose.yaml`, which overrides
   `/effort` and the settings in the session; change it there and recreate the container.
 - **Requests:** LiteLLM (`litellm/litellm-config.yaml`) sends `/v1/messages` to `openai/`
@@ -334,9 +335,9 @@ Claude Code on a model of LiteLLM, the way Hermes reaches its model:
   `allowed_urls.txt`); `opencode.ai` itself (updates, sharing) is not.
   `OPENCODE_DISABLE_FREE_MODELS=1` and `OPENCODE_DISABLE_AUTOUPDATE=1` (both in the env
   file; found in the binary, not in the docs) hide the cloud models and stop the updater.
-- **Sessions:** `./start-opencode.sh` runs `opencode --standalone` (a private server for the
-  session instead of a shared background service); arguments replace that, e.g.
-  `./start-opencode.sh run "…"`. Sessions, database and logs: `opencode/data/home`
+- **Sessions:** `make opencode` runs `opencode --standalone` (a private server for the
+  session instead of a shared background service); `ARGS` replaces that, e.g.
+  `make opencode ARGS='run "…"'`. Sessions, database and logs: `opencode/data/home`
   (`~/.local/share/opencode`). Its instructions: `opencode/AGENTS.md`, read-only at
   `~/.config/opencode/AGENTS.md`.
 - **Not exposed:** no `opencode serve` or web UI through `as-ingress`; its server
@@ -386,7 +387,7 @@ Qwen and opencode are on it (`ALLOW_OUT` of their sidecars); the Claude bridge i
   `environment`; `tcp:zenoh.as.internal:7447` in `ALLOW_OUT` of its sidecar. Then
   `docker compose up -d --force-recreate as-zenoh <its sidecar> <it>`.
 - `as-zenoh` runs as `ZENOH_UID`:`ZENOH_GID` (default 1000, settable in `.env`), which
-  must own `zenoh/logs` (`run-first.sh` creates it, `check-env.sh` checks the owner).
+  must own `zenoh/logs` (`make setup` creates it, `check-env.sh` checks the owner).
 - A new client means a new `alias=ENV_VAR` entry in `LITELLM_CLIENT_KEYS` of
   `as-litellm-keys` and its env file in that service's `env_file`.
 
@@ -407,7 +408,7 @@ Qwen and opencode are on it (`ALLOW_OUT` of their sidecars); the Claude bridge i
   | `as-litellm` | `litellm/logs/access.log` | every request to LiteLLM: client, request line, status (`litellm/logging.json`), except the healthcheck's `/health/liveliness` (`LITELLM_DISABLE_ACCESS_LOG_PATHS`) | rotated at midnight UTC, 7 files |
   | `as-zenoh` | `zenoh/logs/` | every message on the bus ([Message bus](#message-bus-zenoh)) | never deleted |
 
-  - `as-dns`, `as-ingress` and `as-llm-gw` run as `LOGS_UID`:`LOGS_GID` (default 1000, settable in `.env`), which must own their `logs/` (`run-first.sh` creates them, `check-env.sh` checks the owner). They bind `:53` and `:80` through `net.ipv4.ip_unprivileged_port_start` in their own network namespace. LiteLLM writes as root.
+  - `as-dns`, `as-ingress` and `as-llm-gw` run as `LOGS_UID`:`LOGS_GID` (default 1000, settable in `.env`), which must own their `logs/` (`make setup` creates them, `check-env.sh` checks the owner). They bind `:53` and `:80` through `net.ipv4.ip_unprivileged_port_start` in their own network namespace. LiteLLM writes as root.
   - `docker compose logs` still shows the DNS queries and LiteLLM's requests; the Caddy access logs are in the files only.
   - Healthchecks stay out of the access logs: LiteLLM's is the only one that makes a request there (Squid's runs `squid -k check`, `as-zenoh`'s checks its processes; `as-dns`, `as-ingress` and `as-llm-gw` have none).
   - `as-dns` is built from `dns/` (`dns/Dockerfile`): the CoreDNS binary of `COREDNS_IMAGE` on Alpine, because the official image has no shell and CoreDNS logs to stdout only. `dns/run.sh` copies the stream into the files.
@@ -443,7 +444,7 @@ Squid bumps all TLS with the CA from `ssl/init_ca.sh`: `ssl/squid-ca.key` (UID 1
   (`validate.sh` checks it). Without the files a container does not start, instead of
   Docker creating root-owned directories in their place and the stack coming up with TLS
   broken.
-- **`check-env.sh`** (run by `run-first.sh`) fails on a missing CA, a directory in its
+- **`check-env.sh`** (run by `make up`) fails on a missing CA, a directory in its
   place, a certificate that is not PEM or has expired, and a key readable by group or
   others; it warns 30 days before expiry, about a key not owned by UID 13 and a
   certificate that is not world-readable.
