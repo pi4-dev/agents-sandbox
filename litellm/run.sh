@@ -27,10 +27,10 @@ ENTRYPOINT=${LITELLM_ENTRYPOINT:-/app/docker/prod_entrypoint.sh}
     "set LITELLM_IMAGE to a v1.110.x image (the default in docker-compose.yaml)" >&2
   exit 1
 }
-[ -r "$MODELS" ] && [ -x "$MODELS" ] || {
+if [ ! -r "$MODELS" ] || [ ! -x "$MODELS" ]; then
   echo "as-litellm: cannot read $MODELS as $(id -u):$(id -g) (litellm/models permissions)" >&2
   exit 1
-}
+fi
 {
   n=0
   for f in "$MODELS"/*.yaml; do
