@@ -7,7 +7,7 @@
 # A model file with a line "# @profile <name>" is loaded only while that Compose profile is
 # active (AS_PROFILES, ",<COMPOSE_PROFILES>,"; unset: every profile), e.g. claude-local.yaml
 # (profile bridge): without the bridge, LiteLLM does not offer a model nobody serves.
-# Arguments go to LiteLLM after --config (the image's entrypoint starts it).
+# Arguments go to LiteLLM after --config (the image's entrypoint starts it; either name).
 set -eu
 BASE=${LITELLM_BASE_CONFIG:-/app/config.yaml}
 MODELS=${LITELLM_MODELS_DIR:-/app/models}
@@ -37,4 +37,10 @@ active() { case $PROFILES in *",$1,"* | *",*,"*) return 0 ;; esac; return 1; }
   awk '/^include:/ { skip = 1; next } skip && /^[^[:space:]#]/ { skip = 0 } !skip' "$BASE"
 } >"$OUT"
 echo "as-litellm: models from $(grep -c '^  - ' "$OUT" || true) file(s) in $MODELS" >&2
-exec /app/docker/prod_entrypoint.sh --config "$OUT" "$@"
+# the image's entrypoint: /app/docker/prod_entrypoint.sh in images before 2026-11,
+# /app/docker-entrypoint.sh (proxy by default) since
+for entry in /app/docker/prod_entrypoint.sh /app/docker-entrypoint.sh; do
+  [ -f "$entry" ] && exec "$entry" --config "$OUT" "$@"
+done
+echo "as-litellm: no LiteLLM entrypoint in the image (/app/docker/prod_entrypoint.sh, /app/docker-entrypoint.sh)" >&2
+exit 1

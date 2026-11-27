@@ -16,7 +16,7 @@ REPO=$(cd "$(dirname "$0")/../.." && pwd)
 LITELLM=$(sed -nE 's/.*\$\{LITELLM_IMAGE:-([^}]+)\}.*/\1/p' "$REPO/docker-compose.yaml" | head -n1)
 W=$(mktemp -d)
 trap 'rm -rf "$W"' EXIT
-chmod 755 "$W"
+chmod 777 "$W"   # the LiteLLM image runs as a non-root UID (65532) and writes here
 
 # The repo config plus an include: block of the old kind (a file that is not there:
 # run.sh must drop it), and a models directory with two endpoint files and a README.
