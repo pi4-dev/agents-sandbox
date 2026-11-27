@@ -78,7 +78,7 @@ WANT_PROFILES = {
     "as-claude-net": ["claude"], "as-claude-main": ["claude"], "as-claude-qwen-net": ["qwen"], "as-claude-qwen": ["qwen"],
     "as-hermes-net": ["hermes"], "as-hermes": ["hermes"], "as-claude-bridge-net": ["bridge"], "as-claude-bridge": ["bridge"],
     "as-headroom": ["headroom"], "as-open-webui": ["webui"], "as-netshoot-net": ["debug"], "as-netshoot": ["debug"],
-    "as-zenoh": ["claude", "hermes", "qwen"],
+    "as-zenoh": ["claude", "hermes", "qwen"], "as-presidio-analyzer": ["presidio"], "as-presidio-anonymizer": ["presidio"],
 }
 check(sorted(core_cfg["services"]) == CORE, f"no profile: only the core {sorted(core_cfg['services'])}")
 check(sorted(svc) == sorted(CORE + list(WANT_PROFILES)), "every service is in the core or has a profile")
@@ -98,7 +98,7 @@ for name, s in svc.items():
             check(d.get("required") is False, f"{name} -> {dep}: optional (required: false; {dep} has profiles {sorted(theirs)})")
 default_svcs = set(default_cfg["services"])
 check("as-netshoot" not in default_svcs and {"as-claude-main", "as-hermes", "as-claude-qwen", "as-claude-bridge",
-      "as-headroom", "as-open-webui"} <= default_svcs,
+      "as-headroom", "as-open-webui", "as-presidio-analyzer", "as-presidio-anonymizer"} <= default_svcs,
       ".env.example: every profile but debug (as-netshoot only on request)")
 for name in ["as-litellm", "as-litellm-keys", "as-llm-gw"]:
     check((svc[name].get("environment") or {}).get("AS_PROFILES") == ",*,"
@@ -111,11 +111,13 @@ check(all(m and m.group(1) == "bridge" for m in models_tagged.values()),
       "litellm/models/claude-local.yaml: loaded only with the bridge profile (# @profile bridge)")
 
 # --- topology: as-net-blind has no route out; only the gateways touch the VLAN ---
-for net in ["as-net-blind", "as-net-litellm-egress", "as-net-litellm-db", "as-net-headroom-egress"]:
+for net in ["as-net-blind", "as-net-litellm-egress", "as-net-litellm-db", "as-net-headroom-egress", "as-net-presidio"]:
     check(nets[net].get("internal") is True, f"network {net}: internal (no route out)")
 check(members("as-net-vlan") == ["as-ingress", "as-squid"], f"as-net-vlan: only as-squid and as-ingress {members('as-net-vlan')}")
 check(members("as-net-litellm-egress") == ["as-litellm", "as-squid"], f"as-net-litellm-egress: only LiteLLM and Squid {members('as-net-litellm-egress')}")
 check(members("as-net-headroom-egress") == ["as-headroom", "as-squid"], f"as-net-headroom-egress: only Headroom and Squid {members('as-net-headroom-egress')}")
+check(members("as-net-presidio") == ["as-litellm", "as-presidio-analyzer", "as-presidio-anonymizer"],
+      f"as-net-presidio: only LiteLLM and Presidio {members('as-net-presidio')}")
 check(list(svc["as-dns"]["networks"]) == ["as-net-blind"], "as-dns: only on as-net-blind (Docker forwards none of its queries)")
 for name in ["as-squid", "as-ingress"]:
     sc = svc[name].get("sysctls") or {}
@@ -450,6 +452,28 @@ check(ll.get("entrypoint") == ["/bin/sh", "/scripts/run.sh"] and ll_mounts.get("
       "as-litellm: started by litellm/run.sh (config + every models/*.yaml)")
 check(not re.search(r"(?m)^include:", open("litellm/litellm-config.yaml").read()),
       "litellm/litellm-config.yaml: no include: (run.sh includes litellm/models/*.yaml)")
+# --- Presidio: secret and PII masking of every LiteLLM request (profile presidio) ---
+check(ll_mounts.get("/app/guardrails", {}).get("read_only") is True
+      and ll_mounts["/app/guardrails"]["source"].endswith("/litellm/guardrails"),
+      "as-litellm: litellm/guardrails mounted read-only at /app/guardrails (run.sh includes them)")
+for name, part, alias in [("as-presidio-analyzer", "analyzer", "presidio-analyzer"), ("as-presidio-anonymizer", "anonymizer", "presidio-anonymizer")]:
+    ps = svc[name]
+    check(re.search(rf"^mcr\.microsoft\.com/presidio-{part}:\d+\.\d+\.\d+$", ps.get("image", "")) is not None,
+          f"{name}: pinned image version ({ps.get('image')})")
+    check(list(ps.get("networks", {})) == ["as-net-presidio"] and aliases(name, "as-net-presidio") == [f"{alias}.as.internal"],
+          f"{name}: only on as-net-presidio ({alias}.as.internal)")
+    check(ps.get("read_only") is True and ps.get("cap_drop") == ["ALL"] and "no-new-privileges:true" in (ps.get("security_opt") or [])
+          and not ps.get("cap_add") and not ps.get("ports") and not ps.get("privileged") and ps.get("mem_limit") and ps.get("pids_limit"),
+          f"{name}: read-only, no capabilities, no ports, limits")
+    check((ll.get("depends_on") or {}).get(name, {}).get("condition") == "service_healthy",
+          f"as-litellm: waits for {name} (when its profile is on)")
+pg = open("litellm/guardrails/presidio.yaml").read()
+check(re.search(r"(?m)^#\s*@profile\s+presidio\s*$", pg) is not None,
+      "litellm/guardrails/presidio.yaml: loaded only with the presidio profile (# @profile presidio)")
+check(re.search(r"(?m)^\s+mode:\s*pre_call\s*$", pg) and re.search(r"(?m)^\s+default_on:\s*true\s*$", pg)
+      and "presidio-analyzer.as.internal:3000" in pg and "presidio-anonymizer.as.internal:3000" in pg
+      and not re.search(r"(?m)^\s+output_parse_pii:\s*true", pg),
+      "litellm/guardrails/presidio.yaml: masks every request before it leaves LiteLLM, never unmasks the answer")
 check(env["as-hermes-net"].get("ALLOW_IN") == "tcp:9119:ingress.as.internal any::netshoot.as.internal",
       "as-hermes-net: dashboard reachable only from as-ingress")
 ing = svc["as-ingress"]

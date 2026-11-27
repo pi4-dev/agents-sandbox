@@ -1,0 +1,40 @@
+# Masking of secrets and payment data in every request LiteLLM sends to a model
+# (Microsoft Presidio: as-presidio-analyzer, as-presidio-anonymizer; README, "Secret and
+# PII masking"). litellm/run.sh includes this file only while the presidio profile is
+# active: without the containers there is nothing to mask with, and a guardrail with
+# entities configured fails closed (every request would be refused).
+# @profile presidio
+#
+# pre_call: the request is rewritten before it leaves LiteLLM, for every client (Open WebUI,
+# Hermes, Claude on Qwen; chat/completions, /v1/messages, /v1/responses), on every model.
+# A detected value becomes a placeholder (<CREDIT_CARD>, <API_SECRET>, ...); the model never
+# sees the original, the answer is not unmasked (no output_parse_pii). A client cannot turn
+# it off from a request: LiteLLM reads disable_global_guardrails / opted_out_global_guardrails
+# from admin-set key or team metadata only (LiteLLM UI, :4000/ui).
+#
+# Entities: Presidio's built-in validated recognizers (Luhn, IBAN and crypto checksums) and
+# the patterns in presidio-recognizers.json. Not masked on purpose, as they break ordinary
+# work: EMAIL_ADDRESS, PHONE_NUMBER, PERSON, IP_ADDRESS, URL. Add one here (MASK) to mask it.
+# BLOCK refuses the whole request instead; an agent whose history holds such a value then
+# gets every later request refused, so MASK is the default for all.
+guardrails:
+  - guardrail_name: presidio-mask
+    litellm_params:
+      guardrail: presidio
+      mode: pre_call
+      default_on: true
+      presidio_analyzer_api_base: http://presidio-analyzer.as.internal:3000
+      presidio_anonymizer_api_base: http://presidio-anonymizer.as.internal:3000
+      presidio_language: en
+      presidio_ad_hoc_recognizers: /app/guardrails/presidio-recognizers.json
+      pii_entities_config:
+        CREDIT_CARD: MASK
+        IBAN_CODE: MASK
+        CRYPTO: MASK
+        API_SECRET: MASK
+        PRIVATE_KEY: MASK
+        PASSWORD: MASK
+        PL_PESEL: MASK
+      # an 11-digit number alone scores 0.3; "PESEL" nearby raises it to 0.65
+      presidio_score_thresholds:
+        PL_PESEL: 0.5

@@ -31,6 +31,7 @@ Drawing: [topology.svg](topology.svg) (amber frames are the `fw.sh` sidecars).
                        │   │  as-net-litellm-egress (internal): as-litellm <-> as-squid          │
                        │   │  as-net-headroom-egress (internal): as-headroom <-> as-squid        │
                        │   │  as-net-litellm-db (internal): as-litellm, as-litellm-db            │
+                       │   │  as-net-presidio (internal): as-litellm, as-presidio-*              │
                        │   └─────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -53,6 +54,10 @@ Drawing: [topology.svg](topology.svg) (amber frames are the `fw.sh` sidecars).
   same way: only `as-headroom` and Squid are on it, and through it Squid serves
   `squid/conf/headroom_domains.txt` (Hugging Face models) read-only and nothing else.
   The network is not in `localnet`.
+- **Presidio is on `as-net-presidio` only** (profile `presidio`, `PRESIDIO_SUBNET`): an
+  internal network with LiteLLM, which sends it the text of every request to mask
+  (README, "Secret and PII masking"). It has no leg on `as-net-blind`, so no agent reaches
+  it, and no way out.
 - **Addresses inside are Docker's** (`BLIND_IP_RANGE`). Names are network
   aliases (`*.as.internal`). Fixed addresses: the two VLAN legs (`PROXY_IP`,
   `INGRESS_IP`) and `DNS_IP`.

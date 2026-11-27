@@ -48,6 +48,15 @@ jobs:
       - name: LiteLLM loads every models/*.yaml and sends /v1/messages to openai/ deployments as chat/completions
         run: tests/litellm/run-messages-tests.sh
 
+  presidio:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: Presidio guardrail recognizers are valid JSON
+        run: python3 -m json.tool litellm/guardrails/presidio-recognizers.json >/dev/null
+      - name: LiteLLM + Presidio mask secrets and card numbers in every request shape, cannot be turned off by a client, fail closed
+        run: tests/litellm/run-presidio-tests.sh
+
   headroom:
     runs-on: ubuntu-24.04
     steps:

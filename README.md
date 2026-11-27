@@ -23,6 +23,7 @@ Docker Compose homelab for AI coding agents with a shared LiteLLM API, an HTTPS-
 | `as-headroom` | `headroom` | Context compression ([Headroom](https://github.com/headroomlabs-ai/headroom)) between `as-llm-gw` and LiteLLM: tool outputs, logs, JSON and history shrink before they reach the model; Hugging Face models through its own Squid leg |
 | `as-litellm-db` | core | PostgreSQL on a Docker `internal` network |
 | `as-open-webui` | `webui` | Web UI for models |
+| `as-presidio-analyzer`, `as-presidio-anonymizer` | `presidio` | [Microsoft Presidio](https://github.com/microsoft/presidio): LiteLLM masks card numbers, IBANs, API keys, tokens, passwords and private keys in every request before it reaches a model |
 
 ## Repository layout
 
@@ -69,6 +70,7 @@ In short:
    as-net-blind (internal, no route out):  open-webui  litellm  llm-gw  zenoh  hermes  claude  claude-bridge  netshoot  as-dns
                                                     │       (hermes ──► llm-gw ──► litellm)
                                    as-net-litellm-egress (internal): LiteLLM <-> Squid only
+                                   as-net-presidio (internal): LiteLLM <-> Presidio only (masking)
 ```
 
 - **`as-net-blind` is a Docker `internal` network: nothing on it has a route out.** Agents, LiteLLM, Open WebUI and `as-dns` live there. The way out is Squid, the way in `as-ingress`; both have a second leg on the VLAN (`macvlan`, parent `VLAN_PARENT`) and do not route between their legs (`ip_forward=0`, CI-tested with an agent that sets its own route). Changing an address or a route inside `as-net-blind` leads nowhere, even with `NET_ADMIN` (privileged Hermes).
@@ -81,6 +83,7 @@ In short:
   - It drops the response headers that describe the upstream: `llm_provider-*`, under which LiteLLM forwards every header of the provider (no LiteLLM setting turns that off), and `x-litellm-model-*` (`api_base`, the deployment's real model name and id).
   - Error bodies pass unchanged. Admins (`as-ingress :4000`) and Open WebUI use LiteLLM directly.
 - **LiteLLM reaches Squid over its own network** (`as-net-litellm-egress`, `llm-proxy.as.internal`). Squid serves the LLM provider APIs (`llm_api_domains.txt`) and LAN hosts (`lan.hosts`) only on that leg, so the identity is network membership, not an address an agent could forge.
+- **LiteLLM masks secrets before they leave** (profile `presidio`): card numbers, API keys, tokens, passwords and private keys become placeholders in every request, through Presidio on `as-net-presidio` ([details](#secret-and-pii-masking-presidio)).
 - **Dashboard** at `http://<INGRESS_IP>/` (`:80`, only from `INGRESS_DASHBOARD_ALLOW_FROM`): links to every published GUI, with a dot showing whether your browser reaches its port. Caddy builds the list on each request from the `# @dashboard <name> | <description> | <path>` lines in `ingress/Caddyfile`, so a new site with such a line shows up after `docker compose restart as-ingress`. Every path serves the dashboard; the Caddyfile itself is not served.
 - **GUIs through `as-ingress`** on `INGRESS_IP`, one port per GUI: Open WebUI `:8080`, LiteLLM `:4000` (API and `/ui`), Hermes dashboard `:9119` (only from `HERMES_DASHBOARD_ALLOW_FROM`). Caddy listens on its VLAN leg only.
 - **Names, not addresses.** Every service is reached by a `*.as.internal` name (`proxy`, `litellm`, `llm`, `headroom`, `zenoh`, `claude-bridge`, `hermes`, `open-webui`, `netshoot`, `dns`, `ingress`, `dev-ws01`). They are Docker network aliases in `docker-compose.yaml`, and Docker assigns the addresses (`BLIND_IP_RANGE`). Fixed addresses are only the VLAN legs (`PROXY_IP`, `INGRESS_IP`) and `DNS_IP`, all in `.env`; LAN hosts are in `squid/conf/lan.hosts`. `check-env.sh` rejects literal IPs anywhere else.
@@ -154,6 +157,7 @@ chosen by `COMPOSE_PROFILES` in `.env` (comma-separated, `*` = all):
 | `bridge` | `as-claude-bridge` | LiteLLM does not offer `claude-sub` (`litellm/models/claude-local.yaml` has `# @profile bridge`) |
 | `headroom` | `as-headroom` | `as-llm-gw` sends chat and messages to LiteLLM directly, uncompressed |
 | `webui` | `as-open-webui` | its LiteLLM key is not registered; ingress `:8080` answers 502 |
+| `presidio` | `as-presidio-analyzer`, `as-presidio-anonymizer` | LiteLLM sends requests unmasked (`litellm/guardrails/presidio.yaml` has `# @profile presidio`) |
 | `debug` | `as-netshoot` (reaches everything in `as-net-blind`) | off in `.env.example`: only on request |
 
 `as-zenoh` runs with `claude`, `qwen` or `hermes`; each agent's firewall sidecar has the
@@ -161,7 +165,7 @@ agent's profile.
 
 - **Set profiles in `.env`, not with `--profile`.** Compose passes `COMPOSE_PROFILES` to the
   three core containers that adapt to it (`AS_PROFILES`): LiteLLM skips model files of other
-  profiles (`# @profile <name>` in the file), `as-litellm-keys` registers only active clients,
+  profiles (`# @profile <name>` in the file; the same for `litellm/guardrails/`), `as-litellm-keys` registers only active clients,
   `as-llm-gw` uses Headroom only with its profile. `--profile` starts the services but
   leaves those three as they were. `docker compose up -d as-netshoot` (a service named on
   the command line) works the same way: it starts, nothing else changes.
@@ -243,6 +247,69 @@ Hermes, Claude on Qwen -> as-llm-gw -> as-headroom:8787 -> as-litellm:4000
   (or delete the `handle @compressed` block), then `docker compose restart as-llm-gw`.
 - **Tests:** `tests/headroom/run-headroom-tests.sh` (gateway, Headroom, real LiteLLM),
   `tests/squid/run-acl-tests.sh` (its Squid leg), `tests/compose/run-blind-tests.sh`.
+
+### Secret and PII masking (`presidio`)
+
+With the `presidio` profile, LiteLLM masks every request before it leaves for a model:
+a guardrail (`litellm/guardrails/presidio.yaml`) sends the text to
+[Presidio](https://github.com/microsoft/presidio) (`PRESIDIO_ANALYZER_IMAGE`,
+`PRESIDIO_ANONYMIZER_IMAGE`, default `2.2.362`) and replaces what it finds with a
+placeholder. The model sees `<API_SECRET>`, never the token.
+
+```text
+Open WebUI, Hermes, Claude on Qwen -> (as-llm-gw, as-headroom) -> as-litellm -> model
+                                                                      | text, findings
+                                                    as-presidio-analyzer, as-presidio-anonymizer
+                                                    (as-net-presidio: internal, LiteLLM only)
+```
+
+- **What is masked** (`MASK` in `presidio.yaml`):
+
+  | Placeholder | What | How |
+  | --- | --- | --- |
+  | `<CREDIT_CARD>` | card numbers | Presidio, Luhn checksum |
+  | `<IBAN_CODE>` | IBANs | Presidio, IBAN checksum |
+  | `<CRYPTO>` | Bitcoin addresses | Presidio, checksum |
+  | `<API_SECRET>` | `sk-…` keys (Anthropic, OpenAI, OpenRouter, LiteLLM), GitHub, GitLab, AWS access key IDs, Google, Slack, Hugging Face, Stripe, JWTs, `Bearer` tokens, passwords in URLs (`postgres://user:pw@`) | patterns in `litellm/guardrails/presidio-recognizers.json` |
+  | `<PRIVATE_KEY>` | a whole PEM private key block | pattern |
+  | `<PASSWORD>` | the value in `password=`, `DB_PASSWORD:`, `"client_secret": "…"`, `token=` and similar, when it has 8+ characters with a digit | pattern |
+  | `<PL_PESEL>` | an 11-digit PESEL with the word "PESEL" nearby | pattern + context, score threshold 0.5 |
+
+  Not masked on purpose (it breaks ordinary work): e-mail addresses, phone numbers, names,
+  IP addresses, URLs. Add one to `pii_entities_config` (`EMAIL_ADDRESS: MASK`, ...) to mask it.
+- **Where:** every request through LiteLLM: `/v1/chat/completions` (messages, tool outputs),
+  `/v1/messages` (system prompt, text, `tool_result`), `/v1/responses`, streamed or not.
+  The answer is not unmasked. **Not covered:** the Claude agent (`as-claude-main`, its own
+  Anthropic login, not through LiteLLM); the arguments of tool calls the model made earlier
+  (`tool_calls` / `tool_use` in the history, which LiteLLM's Presidio hook does not scan);
+  images and files.
+- **Clients cannot turn it off.** It is `default_on`; LiteLLM reads
+  `disable_global_guardrails` and `opted_out_global_guardrails` only from key or team
+  metadata an admin sets (LiteLLM UI), never from a request.
+- **Fails closed:** with Presidio down or slow, LiteLLM refuses the request (500) rather
+  than send it unmasked. LiteLLM waits for both containers to be healthy at start.
+- **Not a security boundary.** Patterns catch accidents (an agent reads `.env` and the
+  output goes into its context). An agent that wants to leak a secret can encode or split
+  it. A password without a digit, or a token of an unlisted format, passes; a value that
+  looks like one (a test fixture) is masked, and the model then sees the placeholder in
+  code it edits.
+- **Cost:** about 750 MB of memory for the analyzer (spaCy model; `mem_limit` 1.5 GB) and
+  tens of milliseconds per request, more with long contexts. Masking is deterministic, so
+  the provider's prompt cache keeps working.
+- **Your own patterns:** add a recognizer to `presidio-recognizers.json` (its
+  `supported_entity` as a new key in `pii_entities_config`), then
+  `docker compose restart as-litellm`. Presidio matches case-insensitively.
+- **Isolation:** the two containers are on `as-net-presidio` only (internal, `PRESIDIO_SUBNET`,
+  with LiteLLM); no agent reaches them and they reach nothing. Read-only, no capabilities,
+  not root, memory and process limits.
+- **Upgrading:** add `PRESIDIO_SUBNET` to `.env` (from `.env.example`; Compose and
+  `check-env.sh` refuse to start without it, even with the profile off) and `presidio` to
+  `COMPOSE_PROFILES`.
+- **Off / rollback:** drop `presidio` from `COMPOSE_PROFILES`, then `docker compose up -d`
+  (recreates LiteLLM without the guardrail) and `docker compose stop as-presidio-analyzer
+  as-presidio-anonymizer`.
+- **Tests:** `tests/litellm/run-presidio-tests.sh` (real LiteLLM and Presidio: every request
+  shape, bypass attempts, ordinary text unchanged, fail closed), `tests/compose/validate.sh`.
 
 ### LiteLLM keys
 
@@ -540,6 +607,7 @@ tests/compose/validate.sh          # Compose renders; security invariants hold
 sudo tests/compose/run-blind-tests.sh  # as-net-blind on real containers: proxy paths, ingress, no escape (needs docker)
 tests/dns/run-dns-tests.sh         # as-dns: aliases, no recursion, no leak, logging (needs docker)
 tests/litellm/run-keys-tests.sh    # as-litellm-keys against real LiteLLM + PostgreSQL (needs docker)
+tests/litellm/run-presidio-tests.sh  # Presidio masking: blocked (secrets) and permitted (ordinary text) requests (needs docker)
 sudo tests/squid/run-acl-tests.sh  # permitted/blocked requests through squid/conf/*.example (needs squid-openssl);
                                    # pass squid/conf to test your own copies
 sudo tests/fw/run-fw-tests.sh      # permitted/blocked traffic through fw.sh in network namespaces

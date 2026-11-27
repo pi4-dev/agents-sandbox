@@ -7,7 +7,8 @@ name: agents-sandbox
 # (as-squid, as-dns, as-ingress, as-litellm, its database and keys job, as-llm-gw).
 #   claude   as-claude-main        qwen     as-claude-qwen       hermes  as-hermes
 #   bridge   as-claude-bridge      headroom as-headroom          webui   as-open-webui
-#   debug    as-netshoot           (as-zenoh runs with claude, qwen or hermes)
+#   presidio as-presidio-*         debug    as-netshoot
+#   (as-zenoh runs with claude, qwen or hermes)
 # Each agent's firewall sidecar has the agent's profile. Set profiles in .env, not with
 # --profile: as-litellm, as-litellm-keys and as-llm-gw read them from COMPOSE_PROFILES.
 
@@ -246,14 +247,19 @@ services:
       as-dns: { condition: service_started }
       as-claude-bridge: { condition: service_started, required: false }   # profile bridge
       as-litellm-db: { condition: service_healthy }
+      # profile presidio: litellm/guardrails/presidio.yaml masks every request with them
+      as-presidio-analyzer: { condition: service_healthy, required: false }
+      as-presidio-anonymizer: { condition: service_healthy, required: false }
     networks:
       as-net-blind:
         aliases: [litellm.as.internal]
       as-net-litellm-db: {}
       as-net-litellm-egress: {}
+      as-net-presidio: {}
     volumes:
       - ./litellm/litellm-config.yaml:/app/config.yaml:ro
       - ./litellm/models:/app/models:ro      # one file per API endpoint, all included (run.sh)
+      - ./litellm/guardrails:/app/guardrails:ro   # guardrails (Presidio), included by profile (run.sh)
       - ./litellm/run.sh:/scripts/run.sh:ro  # config + include: of every models/*.yaml
       - type: bind
         source: ./ssl/squid-ca.crt
@@ -399,6 +405,54 @@ services:
     read_only: true
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
+    logging: *bounded-logs
+
+# - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+  # Presidio (profile presidio): LiteLLM sends the text of every request to the analyzer,
+  # then the findings to the anonymizer, and forwards the masked request to the model
+  # (litellm/guardrails/presidio.yaml). Both are on as-net-presidio only, an internal network
+  # with LiteLLM: no other container reaches them, they reach nothing (the NLP model is in
+  # the image, nothing is downloaded at start).
+  as-presidio-analyzer:
+    image: ${PRESIDIO_ANALYZER_IMAGE:-mcr.microsoft.com/presidio-analyzer:2.2.362}
+    container_name: as-presidio-analyzer
+    profiles: [presidio]
+    restart: unless-stopped
+    networks:
+      as-net-presidio:
+        aliases: [presidio-analyzer.as.internal]
+    healthcheck: &presidio-health
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:3000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 256
+    mem_limit: 1536m               # spaCy en_core_web_lg: about 750 MB idle
+    memswap_limit: 1536m
+    logging: *bounded-logs
+
+  as-presidio-anonymizer:
+    image: ${PRESIDIO_ANONYMIZER_IMAGE:-mcr.microsoft.com/presidio-anonymizer:2.2.362}
+    container_name: as-presidio-anonymizer
+    profiles: [presidio]
+    restart: unless-stopped
+    networks:
+      as-net-presidio:
+        aliases: [presidio-anonymizer.as.internal]
+    healthcheck: *presidio-health
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 128
+    mem_limit: 256m
+    memswap_limit: 256m
     logging: *bounded-logs
 
 # - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -860,6 +914,10 @@ networks:
   as-net-litellm-db:
     internal: true                 # no gateway: does not take over the default route
     ipam: { config: [ { subnet: "${DB_SUBNET:?set it in .env (see .env.example)}" } ] }
+  # LiteLLM <-> as-presidio-analyzer, as-presidio-anonymizer only (profile presidio)
+  as-net-presidio:
+    internal: true
+    ipam: { config: [ { subnet: "${PRESIDIO_SUBNET:?set it in .env (see .env.example)}" } ] }
 
 
 volumes:

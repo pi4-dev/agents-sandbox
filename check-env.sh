@@ -42,7 +42,7 @@ for f in "${envs[@]}"; do
 done
 
 # --- profiles: COMPOSE_PROFILES (shell over .env, as Compose reads it) ---
-KNOWN_PROFILES="claude qwen hermes bridge headroom webui debug"
+KNOWN_PROFILES="claude qwen hermes bridge headroom webui presidio debug"
 profiles=
 if [ $mode = local ] && [ -f .env ]; then
   if [ -n "${COMPOSE_PROFILES+set}" ]; then profiles=$COMPOSE_PROFILES; else profiles=$(get .env COMPOSE_PROFILES); fi
@@ -380,7 +380,7 @@ done
 # --- addresses live only in .env and squid/conf/lan.hosts; everything else uses names ---
 ipv4='([0-9]{1,3}\.){3}[0-9]{1,3}'
 for f in "${present[@]}" proxy.env docker-compose.yaml compose.hermes-privileged.yaml hermes/config.yaml* hermes/managed.env* zenoh/conf/* \
-         litellm/litellm-config.yaml litellm/models/*.yaml dns/Corefile ingress/Caddyfile ingress/dashboard.html squid/conf/* \
+         litellm/litellm-config.yaml litellm/models/*.yaml litellm/guardrails/*.yaml dns/Corefile ingress/Caddyfile ingress/dashboard.html squid/conf/* \
          claude-main/policy/*; do
   [ -f "$f" ] || continue
   case $f in .env|.env.example|squid/conf/lan.hosts|squid/conf/lan.hosts.example) continue ;; esac

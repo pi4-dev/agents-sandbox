@@ -1,0 +1,45 @@
+[
+  {
+    "name": "api_secrets",
+    "supported_language": "en",
+    "supported_entity": "API_SECRET",
+    "patterns": [
+      {"name": "sk_keys", "regex": "\\bsk-[A-Za-z0-9_-]{20,}", "score": 0.9},
+      {"name": "github", "regex": "\\b(?:gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{40,})", "score": 0.95},
+      {"name": "gitlab", "regex": "\\bglpat-[A-Za-z0-9_-]{20,}", "score": 0.95},
+      {"name": "aws_access_key_id", "regex": "\\b(?:AKIA|ASIA)[0-9A-Z]{16}\\b", "score": 0.9},
+      {"name": "google_api_key", "regex": "\\bAIza[0-9A-Za-z_-]{35}\\b", "score": 0.9},
+      {"name": "slack", "regex": "\\bxox[abprs]-[A-Za-z0-9-]{10,}", "score": 0.9},
+      {"name": "hugging_face", "regex": "\\bhf_[A-Za-z0-9]{30,}", "score": 0.9},
+      {"name": "stripe", "regex": "\\b[rs]k_live_[A-Za-z0-9]{20,}", "score": 0.95},
+      {"name": "jwt", "regex": "\\beyJ[A-Za-z0-9_-]{8,}\\.eyJ[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}", "score": 0.9},
+      {"name": "bearer", "regex": "(?<=\\bbearer\\s+)[A-Za-z0-9._~+/=-]{20,}", "score": 0.8},
+      {"name": "url_password", "regex": "(?<=://[^/\\s:@]{1,64}:)[^/\\s@]{3,}(?=@)", "score": 0.8}
+    ]
+  },
+  {
+    "name": "private_keys",
+    "supported_language": "en",
+    "supported_entity": "PRIVATE_KEY",
+    "patterns": [
+      {"name": "pem", "regex": "-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|\\Z)", "score": 1.0}
+    ]
+  },
+  {
+    "name": "password_assignments",
+    "supported_language": "en",
+    "supported_entity": "PASSWORD",
+    "patterns": [
+      {"name": "key_value", "regex": "(?<=(?:password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|credential)[\\w.-]*[\"']?\\s*[:=]\\s*[\"']?)(?=[^\\s\"'`,;(){}\\[\\]<>$]*\\d)[^\\s\"'`,;(){}\\[\\]<>$]{8,}", "score": 0.7}
+    ]
+  },
+  {
+    "name": "pl_pesel",
+    "supported_language": "en",
+    "supported_entity": "PL_PESEL",
+    "patterns": [
+      {"name": "pesel", "regex": "\\b\\d{2}(?:[02468][1-9]|[13579][0-2])(?:0[1-9]|[12]\\d|3[01])\\d{5}\\b", "score": 0.3}
+    ],
+    "context": ["pesel"]
+  }
+]
